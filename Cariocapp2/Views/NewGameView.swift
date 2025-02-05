@@ -15,6 +15,7 @@ struct NewGameView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @EnvironmentObject private var container: DependencyContainer
     
     @StateObject private var repository: CoreDataPlayerRepository
     @StateObject private var coordinator: GameCoordinator
@@ -49,15 +50,10 @@ struct NewGameView: View {
     // MARK: - Initialization
     init() {
         print("🎮 NewGameView - Initializing")
-        
-        // Initialize with empty repositories, contexts will be updated in onAppear
-        let repository = CoreDataPlayerRepository(context: NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType))
-        self._repository = StateObject(wrappedValue: repository)
-        
-        let coordinator = GameCoordinator(viewContext: NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType))
-        self._coordinator = StateObject(wrappedValue: coordinator)
-        
-        print("🎮 NewGameView initialized, waiting for context from environment")
+        let context = PersistenceController.shared.container.viewContext
+        self._repository = StateObject(wrappedValue: CoreDataPlayerRepository(context: context))
+        self._coordinator = StateObject(wrappedValue: GameCoordinator(viewContext: context))
+        print("🎮 NewGameView initialized")
     }
     
     // MARK: - Computed Properties
@@ -299,6 +295,10 @@ struct NewGameView: View {
         
         Task { @MainActor in
             do {
+                print("🎮 Selected players: \(selectedPlayers.map { "\($0.name) (\($0.id))" }.joined(separator: ", "))")
+                print("🎮 Guest players: \(guestPlayers.map { "\($0.name) (\($0.id))" }.joined(separator: ", "))")
+                print("🎮 Dealer index: \(dealerIndex)")
+                
                 // Get selected players
                 let selectedPlayers = registeredPlayers.filter { selectedPlayerIds.contains($0.id) }
                 
@@ -308,40 +308,58 @@ struct NewGameView: View {
                 }
                 
                 // Create game with selected players and guests
+                print("🎮 Creating game with coordinator...")
                 let game = try await coordinator.createGame(
                     players: selectedPlayers,
                     guestPlayers: guestPlayerTuples,
                     dealerIndex: Int16(dealerIndex)
                 )
                 
-                // Ensure game is saved
-                try await viewContext.save()
+                print("🎮 Game created with ID: \(game.id)")
+                print("🎮 Game created, saving context...")
+                try viewContext.save()
                 
                 // Verify game exists in context
+                print("🎮 Verifying game...")
                 if let verifiedGame = try await coordinator.verifyGame(id: game.id) {
-                    print("🎮 NewGameView - Game created and verified: \(verifiedGame.id)")
-                    createdGameID = verifiedGame.id
-                    navigateToGame = true
+                    print("🎮 Game verified successfully: \(verifiedGame.id)")
+                    print("🎮 Players in game: \(verifiedGame.playersArray.map { "\($0.name) (\($0.id))" }.joined(separator: ", "))")
+                    
+                    await MainActor.run {
+                        self.createdGameID = verifiedGame.id
+                        self.navigateToGame = true
+                    }
                 } else {
+                    print("❌ Game verification failed")
                     throw GameError.gameNotFound
                 }
             } catch {
-                alertTitle = "Error"
-                alertMessage = error.localizedDescription
-                showingAlert = true
+                print("❌ Failed to create game: \(error)")
+                print("❌ Detailed error: \(String(describing: error))")
+                
+                await MainActor.run {
+                    alertTitle = "Error"
+                    alertMessage = error.localizedDescription
+                    showingAlert = true
+                    createdGameID = nil
+                    navigateToGame = false
+                }
             }
             
-            isCreatingGame = false
+            await MainActor.run {
+                isCreatingGame = false
+            }
         }
     }
 
     // MARK: - Navigation
     @ViewBuilder
     private var gameDestination: some View {
-        let _ = print("🎮 NewGameView - Creating game destination")
         if let gameID = createdGameID {
-            let _ = print("🎮 NewGameView - Creating GameView for game: \(gameID)")
             GameView(gameID: gameID)
+                .onAppear {
+                    print("🎮 GameView appeared for game: \(gameID)")
+                }
         } else {
             ContentUnavailableView(
                 "Game Not Found",

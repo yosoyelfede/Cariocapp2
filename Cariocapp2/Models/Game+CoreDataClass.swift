@@ -4,6 +4,13 @@ import CoreData
 @objc(Game)
 public class Game: NSManagedObject {
     // MARK: - Constants
+    static let entityName = "Game"
+    static let maxRounds = 12
+    
+    override public class func entity() -> NSEntityDescription {
+        return NSEntityDescription.entity(forEntityName: entityName, in: PersistenceController.shared.container.viewContext)!
+    }
+    
     private static let minPlayers = 2
     private static let maxPlayers = 4
     private static let initialRoundNumber: Int16 = 1
@@ -15,11 +22,12 @@ public class Game: NSManagedObject {
         case invalidRoundNumber(Int16)
         case missingRounds
         case duplicatePlayer(UUID)
+        case invalidStartDate
         
         var errorDescription: String? {
             switch self {
             case .invalidPlayerCount(let count):
-                return "Invalid number of players: \(count). Must be between \(Game.minPlayers) and \(Game.maxPlayers)"
+                return "Invalid number of players: \(count). Must be between 2 and 4"
             case .invalidDealerIndex(let index, let count):
                 return "Invalid dealer index: \(index). Must be between 0 and \(count - 1)"
             case .invalidRoundNumber(let number):
@@ -28,12 +36,17 @@ public class Game: NSManagedObject {
                 return "Game must have at least one round"
             case .duplicatePlayer(let id):
                 return "Duplicate player with ID: \(id)"
+            case .invalidStartDate:
+                return "Game start date is invalid"
             }
         }
     }
     
     // MARK: - Static Methods
     static func createGame(players: [Player], dealerIndex: Int16, context: NSManagedObjectContext) throws -> Game {
+        // Validate input
+        try validateGameCreation(players: players, dealerIndex: dealerIndex)
+        
         // Create new game
         let game = Game(context: context)
         game.id = UUID()
@@ -43,14 +56,54 @@ public class Game: NSManagedObject {
         game.isActive = true
         
         // Add players
-        for player in players {
-            game.addToPlayers(player)
-        }
+        let playersSet = NSSet(array: players)
+        game.players = playersSet
+        
+        // Create initial round
+        let round = Round(context: context)
+        round.id = UUID()
+        round.number = initialRoundNumber
+        round.dealerIndex = dealerIndex
+        round.isCompleted = false
+        round.isSkipped = false
+        round.scores = [:]
+        round.game = game
+        
+        // Add round to game
+        game.addToRounds(round)
         
         // Validate initial state
-        try game.validate()
+        try game.validateState()
         
         return game
+    }
+    
+    private static func validateGameCreation(players: [Player], dealerIndex: Int16) throws {
+        // Check player count
+        guard players.count >= minPlayers && players.count <= maxPlayers else {
+            throw ValidationError.invalidPlayerCount(players.count)
+        }
+        
+        // Check dealer index
+        guard dealerIndex >= 0 && dealerIndex < Int16(players.count) else {
+            throw ValidationError.invalidDealerIndex(dealerIndex, playerCount: players.count)
+        }
+        
+        // Check for duplicate players
+        let playerIds = players.map { $0.id }
+        let uniqueIds = Set(playerIds)
+        if uniqueIds.count != players.count {
+            if let duplicateId = playerIds.first(where: { id in
+                playerIds.filter { $0 == id }.count > 1
+            }) {
+                throw ValidationError.duplicatePlayer(duplicateId)
+            }
+        }
+        
+        // Validate each player
+        for player in players {
+            try player.validateState()
+        }
     }
     
     // MARK: - Instance Methods
@@ -75,47 +128,48 @@ public class Game: NSManagedObject {
     }
     
     // MARK: - Validation
-    private static func validateGameCreation(players: [Player], dealerIndex: Int16) throws {
-        // Check player count
-        guard players.count >= minPlayers && players.count <= maxPlayers else {
-            throw ValidationError.invalidPlayerCount(players.count)
-        }
-        
-        // Check dealer index
-        guard dealerIndex >= 0 && dealerIndex < Int16(players.count) else {
-            throw ValidationError.invalidDealerIndex(dealerIndex, playerCount: players.count)
-        }
-        
-        // Check for duplicate players
-        let playerIds = players.map { $0.id }
-        let uniqueIds = Set(playerIds)
-        if uniqueIds.count != players.count {
-            if let duplicateId = playerIds.first(where: { id in
-                playerIds.filter { $0 == id }.count > 1
-            }) {
-                throw ValidationError.duplicatePlayer(duplicateId)
-            }
-        }
-    }
-    
     func validateState() throws {
-        // Verify rounds exist
-        guard let rounds = self.rounds as? Set<Round>, !rounds.isEmpty else {
+        // Validate basic properties
+        guard id != UUID.init() else {
+            throw ValidationError.invalidPlayerCount(0)
+        }
+        
+        guard startDate <= Date() else {
+            throw ValidationError.invalidStartDate
+        }
+        
+        // Validate players
+        guard let playersSet = players as? Set<Player>,
+              !playersSet.isEmpty else {
+            throw ValidationError.invalidPlayerCount(0)
+        }
+        
+        let playerCount = playersSet.count
+        guard playerCount >= Self.minPlayers && playerCount <= Self.maxPlayers else {
+            throw ValidationError.invalidPlayerCount(playerCount)
+        }
+        
+        // Validate dealer index
+        guard dealerIndex >= 0 && dealerIndex < Int16(playerCount) else {
+            throw ValidationError.invalidDealerIndex(dealerIndex, playerCount: playerCount)
+        }
+        
+        // Validate rounds
+        guard let roundsSet = rounds as? Set<Round>,
+              !roundsSet.isEmpty else {
             throw ValidationError.missingRounds
         }
         
-        // Verify round numbers are sequential
-        let roundNumbers = rounds.map { $0.number }.sorted()
-        for (index, number) in roundNumbers.enumerated() {
-            if number != Int16(index + 1) {
-                throw ValidationError.invalidRoundNumber(number)
-            }
+        // Validate round numbers
+        let roundNumbers = roundsSet.map { $0.number }.sorted()
+        guard roundNumbers.first == 1 else {
+            throw ValidationError.invalidRoundNumber(roundNumbers.first ?? 0)
         }
         
-        // Verify dealer index is still valid
-        if let players = self.players as? Set<Player> {
-            guard dealerIndex >= 0 && dealerIndex < Int16(players.count) else {
-                throw ValidationError.invalidDealerIndex(dealerIndex, playerCount: players.count)
+        // Validate round sequence
+        for (index, number) in roundNumbers.enumerated() {
+            guard number == Int16(index + 1) else {
+                throw ValidationError.invalidRoundNumber(number)
             }
         }
     }

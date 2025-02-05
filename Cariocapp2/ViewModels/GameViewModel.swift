@@ -19,6 +19,9 @@ final class GameViewModel: ObservableObject {
     
     @MainActor
     static func instance(for gameId: UUID, coordinator: GameCoordinator) -> GameViewModel {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+        
         // Clean up any nil references
         activeInstances = activeInstances.filter { $0.value.instance != nil }
         
@@ -62,10 +65,10 @@ final class GameViewModel: ObservableObject {
     private let stateLock = NSLock()
     
     // MARK: - State Protection
-    private func withStateLock<T>(_ operation: () -> T) -> T {
+    private func withStateLock<T>(_ operation: () async throws -> T) async throws -> T {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return operation()
+        return try await operation()
     }
     
     // MARK: - Initialization
@@ -93,138 +96,173 @@ final class GameViewModel: ObservableObject {
     }
     
     // MARK: - Game State Management
-    func preloadGame(_ game: Game) {
-        print("🔍 GameViewModel[\(gameId)] - Starting preloadGame")
-        print("🔍 GameViewModel[\(gameId)] - Game ID: \(game.id)")
-        Task { @MainActor in
-            do {
-                try await loadGame(game)
-            } catch {
+    func preloadGame(_ game: Game) async throws {
+        print("🔍 GameViewModel[\(self.gameId)] - Starting preloadGame")
+        print("🔍 GameViewModel[\(self.gameId)] - Game ID: \(game.id)")
+        try await self.loadGame(game)
+    }
+    
+    func refreshGameState() async throws {
+        guard !isRefreshing else {
+            print("🔍 GameViewModel[\(self.gameId)] - Refresh already in progress, skipping")
+            return
+        }
+        
+        isRefreshing = true
+        await MainActor.run { isLoading = true }
+        
+        defer {
+            Task { @MainActor in
+                isRefreshing = false
+                isLoading = false
+            }
+        }
+        
+        print("🔍 GameViewModel[\(self.gameId)] - Refreshing game state")
+        
+        do {
+            guard let game = try await coordinator.verifyGame(id: self.gameId) else {
+                print("🔍 GameViewModel[\(self.gameId)] - Game not found")
+                await MainActor.run {
+                    self.game = nil
+                    self.error = GameError.gameNotFound
+                }
+                return
+            }
+            
+            guard game.isActive else {
+                print("🔍 GameViewModel[\(self.gameId)] - Game is not active")
+                await MainActor.run {
+                    self.game = nil
+                    self.error = GameError.invalidGameState("Game is not active")
+                }
+                return
+            }
+            
+            try await self.loadGame(game)
+            print("🔍 GameViewModel[\(self.gameId)] - Game state refreshed successfully")
+        } catch {
+            print("🔍 GameViewModel[\(self.gameId)] - Failed to refresh game state: \(error)")
+            await MainActor.run { 
                 self.error = error
+                self.game = nil
             }
         }
     }
     
     func loadGame(_ game: Game) async throws {
-        print("🔍 GameViewModel[\(gameId)] - Starting game load")
+        print("🔍 GameViewModel[\(self.gameId)] - Starting game load")
         
-        // Simulate some async work to ensure proper async context
-        try await Task.sleep(nanoseconds: 1)
-        
-        // Verify game ID matches
-        guard game.id == gameId else {
-            print("🔍 GameViewModel[\(gameId)] - Game ID mismatch")
-            throw GameError.invalidGameState("Game ID mismatch")
+        try await self.withStateLock { [weak self] in
+            guard let self = self else { return }
+            
+            // Verify game ID matches
+            guard game.id == self.gameId else {
+                print("🔍 GameViewModel[\(self.gameId)] - Game ID mismatch")
+                throw GameError.invalidGameState("Game ID mismatch")
+            }
+            
+            print("🔍 GameViewModel[\(self.gameId)] - Updating game state")
+            
+            // Verify game has required relationships
+            guard let players = game.players as? Set<Player>, !players.isEmpty else {
+                print("🔍 GameViewModel[\(self.gameId)] - Game has no players")
+                throw GameError.invalidGameState("Game has no players")
+            }
+            
+            let playersArray = game.playersArray
+            guard !playersArray.isEmpty else {
+                print("🔍 GameViewModel[\(self.gameId)] - Game players array is empty")
+                throw GameError.invalidGameState("Game players array is empty")
+            }
+            
+            // Update state in a single MainActor run to prevent partial updates
+            try await MainActor.run {
+                self.game = game
+                self.currentRound = Int16(game.currentRound)
+                self.dealer = playersArray[Int(game.dealerIndex)]
+                self.starter = playersArray[(Int(game.dealerIndex) + 1) % playersArray.count]
+                self.players = playersArray
+                self.roundProgress = self.calculateRoundProgress(game)
+                self.updateScores(for: game)
+                self.updateCanEndRound()
+                self.canSubmitScores = !game.roundsArray.contains { $0.number == game.currentRound && $0.isCompleted }
+                self.shouldShowGameCompletion = game.isComplete
+                
+                if let currentRoundObj = game.roundsArray.first(where: { $0.number == game.currentRound }) {
+                    self.firstCardColor = currentRoundObj.firstCardColor.flatMap { FirstCardColor(rawValue: $0) }
+                } else {
+                    self.firstCardColor = nil
+                }
+            }
+            
+            print("🔍 GameViewModel[\(self.gameId)] - Game loaded successfully")
+            print("🔍 GameViewModel[\(self.gameId)] - Current round: \(self.currentRound)")
+            print("🔍 GameViewModel[\(self.gameId)] - Dealer: \(self.dealer?.name ?? "None")")
+            print("🔍 GameViewModel[\(self.gameId)] - Starter: \(self.starter?.name ?? "None")")
+            print("🔍 GameViewModel[\(self.gameId)] - Players: \(self.players.map { $0.name }.joined(separator: ", "))")
         }
-        
-        // Update state
-        self.game = game
-        currentRound = Int16(game.currentRound)
-        dealer = game.playersArray[Int(game.dealerIndex)]
-        starter = game.playersArray[(Int(game.dealerIndex) + 1) % game.playersArray.count]
-        players = game.playersArray
-        roundProgress = calculateRoundProgress(game)
-        updateScores(for: game)
-        updateCanEndRound()
-        canSubmitScores = !game.roundsArray.contains { $0.number == game.currentRound && $0.isCompleted }
-        shouldShowGameCompletion = game.isComplete
-        
-        // Reset or load firstCardColor based on current round
-        if let currentRoundObj = game.roundsArray.first(where: { $0.number == game.currentRound }) {
-            self.firstCardColor = currentRoundObj.firstCardColor.flatMap { FirstCardColor(rawValue: $0) }
-        } else {
-            self.firstCardColor = nil
-        }
-        
-        print("🔍 GameViewModel[\(gameId)] - Game loaded successfully")
-        print("🔍 GameViewModel[\(gameId)] - Current round: \(currentRound)")
-        print("🔍 GameViewModel[\(gameId)] - Dealer: \(dealer?.name ?? "None")")
-        print("🔍 GameViewModel[\(gameId)] - Starter: \(starter?.name ?? "None")")
-        print("🔍 GameViewModel[\(gameId)] - Players: \(players.map { $0.name }.joined(separator: ", "))")
-    }
-    
-    func refreshGameState() async throws {
-        guard let game = try await coordinator.verifyGame(id: gameId) else { return }
-        try await loadGame(game)
-        objectWillChange.send()
-    }
-    
-    func refreshGameState(game: Game) async throws {
-        try await loadGame(game)
-        objectWillChange.send()
     }
     
     private func updateScores(for game: Game) {
         print("📊 Starting score update for game \(game.id)")
-        print("📊 Total rounds in game: \(game.roundsArray.count)")
         
         var newCurrentScores: [UUID: Int32] = [:]
         var newTotalScores: [UUID: Int32] = [:]
         
-        // Log round details
-        print("📊 Round details:")
-        for round in game.roundsArray {
-            print("  - Round \(round.number): completed=\(round.isCompleted), skipped=\(round.isSkipped), scores=\(round.scores ?? [:])")
-        }
-        
-        // Update current round scores
-        if let currentRoundScores = game.roundsArray.first(where: { $0.number == game.currentRound })?.scores {
-            print("📊 Current round \(game.currentRound) scores: \(currentRoundScores)")
-            for (playerId, score) in currentRoundScores {
-                if let id = UUID(uuidString: playerId) {
-                    newCurrentScores[id] = score
-                }
-            }
-        }
-        
         // Get completed non-skipped rounds for total score calculation
         let completedRounds = game.roundsArray.filter { $0.isCompleted && !$0.isSkipped }
-        print("📊 Found \(completedRounds.count) completed non-skipped rounds for total score calculation")
-        print("📊 Completed rounds: \(completedRounds.map { "Round \($0.number)" }.joined(separator: ", "))")
+        print("📊 Found \(completedRounds.count) completed non-skipped rounds")
         
-        // Calculate total scores
+        // Calculate total scores for each player
         for player in game.playersArray {
-            print("📊 Calculating total for \(player.name) (ID: \(player.id)):")
             var totalScore: Int32 = 0
             
             for round in completedRounds {
                 if let score = round.scores?[player.id.uuidString] {
-                    print("  - Round \(round.number): Adding score \(score)")
                     totalScore += score
-                } else {
-                    print("  - Round \(round.number): No score found!")
                 }
             }
             
-            print("📊 Final total for \(player.name): \(totalScore)")
             newTotalScores[player.id] = totalScore
+            
+            // Set current round score if available
+            if let currentRoundScores = game.roundsArray.first(where: { $0.number == game.currentRound })?.scores {
+                if let score = currentRoundScores[player.id.uuidString] {
+                    newCurrentScores[player.id] = score
+                }
+            }
         }
         
-        currentScores = newCurrentScores
-        totalScores = newTotalScores
+        self.currentScores = newCurrentScores
+        self.totalScores = newTotalScores
     }
     
     func cleanup() {
-        print("🔍 GameViewModel[\(gameId)] - Starting cleanup")
+        print("🔍 GameViewModel[\(self.gameId)] - Starting cleanup")
         
         Task { @MainActor in
+            guard !isCleaning else { return }
+            isCleaning = true
+            
             // Cancel any pending operations
-            isRefreshing = false
+            self.isRefreshing = false
+            self.loadTask?.cancel()
             
             // Clear state
-            game = nil
-            currentRound = 1
-            players.removeAll()
-            currentScores.removeAll()
-            totalScores.removeAll()
-            roundTransitionMessage = nil
-            error = nil
-            firstCardColor = nil
+            self.game = nil
+            self.currentRound = 1
+            self.players.removeAll()
+            self.currentScores.removeAll()
+            self.totalScores.removeAll()
+            self.roundTransitionMessage = nil
+            self.error = nil
+            self.firstCardColor = nil
             
-            isCleaning = false
+            self.isCleaning = false
+            
+            print("🔍 GameViewModel[\(self.gameId)] - Cleanup complete")
         }
-        
-        print("🔍 GameViewModel[\(gameId)] - Cleanup complete")
     }
     
     func cleanupOnDismiss() {
@@ -416,10 +454,11 @@ final class GameViewModel: ObservableObject {
     }
     
     func setFirstCardColor(_ color: FirstCardColor) async {
-        guard let game = game,
+        guard let game = self.game,
               let context = game.managedObjectContext else { return }
         
-        await context.perform {
+        await context.perform { [weak self] in
+            guard let self = self else { return }
             // Get or create current round
             let currentRound = game.roundsArray.first { $0.number == game.currentRound } ?? Round(context: context)
             if currentRound.game == nil {
@@ -432,6 +471,24 @@ final class GameViewModel: ObservableObject {
             currentRound.firstCardColor = color.rawValue
             self.firstCardColor = color
             try? context.save()
+        }
+    }
+    
+    // MARK: - State Management
+    private func updateState(_ operation: @escaping () async throws -> Void) async throws {
+        self.isRefreshing = true
+        defer { self.isRefreshing = false }
+        
+        try await self.withStateLock {
+            try await operation()
+            self.objectWillChange.send()
+        }
+    }
+    
+    // MARK: - Error Handling
+    func setError(_ error: Error?) {
+        Task { @MainActor in
+            self.error = error
         }
     }
 }

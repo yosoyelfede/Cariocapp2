@@ -28,7 +28,7 @@
         <attribute name="isCompleted" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="isSkipped" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="number" attributeType="Integer 16" defaultValueString="1" usesScalarValueType="YES"/>
-        <attribute name="scores" optional="YES" attributeType="Transformable" valueTransformerName="ScoresDictionaryValueTransformer" customClassName=".[String:Int32]"/>
+        <attribute name="scores" optional="YES" attributeType="Transformable" valueTransformerName="ScoresDictionaryValueTransformer"/>
         <relationship name="game" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="Game" inverseName="rounds" inverseEntity="Game"/>
     </entity>
 </model>

@@ -118,63 +118,65 @@ final class GameCoordinator: ObservableObject {
     }
     
     // MARK: - Game Creation
-    func createGame(
-        players: [Player],
-        guestPlayers: [(id: UUID, name: String)] = [],
-        dealerIndex: Int16
-    ) async throws -> Game {
-        guard players.count + guestPlayers.count >= 2 && players.count + guestPlayers.count <= 4 else {
+    func createGame(players: [Player], guestPlayers: [(id: UUID, name: String)], dealerIndex: Int16) async throws -> Game {
+        print("🎮 Creating game with \(players.count) players and \(guestPlayers.count) guests")
+        
+        // Validate total player count
+        let totalPlayers = players.count + guestPlayers.count
+        guard totalPlayers >= 2 && totalPlayers <= 4 else {
             throw GameCoordinatorError.invalidPlayerCount
         }
         
-        isProcessing = true
-        defer { isProcessing = false }
-        
-        return try await performTransaction { [weak self] context in
-            guard let self = self else {
-                throw GameCoordinatorError.contextError("Coordinator was deallocated")
-            }
-            
-            // Create game entity
-            let game = Game(context: context)
-            game.id = UUID()
-            game.dealerIndex = dealerIndex
-            game.currentRound = 1
-            game.isActive = true
-            game.startDate = Date()
+        return try await performTransaction { context in
+            print("🎮 Starting game creation transaction")
             
             // Create guest players
-            let guestPlayerEntities = guestPlayers.map { guest -> Player in
+            let guestPlayerObjects = try guestPlayers.map { guest -> Player in
+                print("🎮 Creating guest player: \(guest.name)")
                 let player = Player(context: context)
                 player.id = guest.id
                 player.name = guest.name
                 player.isGuest = true
+                player.createdAt = Date()
                 player.gamesPlayed = 0
                 player.gamesWon = 0
                 player.totalScore = 0
                 player.averagePosition = 0
+                try player.validate() // Validate each guest player
                 return player
             }
             
-            // Add all players to game
-            let allPlayers = players + guestPlayerEntities
+            // Create game
+            print("🎮 Creating game object")
+            let game = Game(context: context)
+            game.id = UUID()
+            game.startDate = Date()
+            game.currentRound = 1
+            game.dealerIndex = dealerIndex
+            game.isActive = true
+            
+            // Add all players to the game
+            let allPlayers = players + guestPlayerObjects
             game.players = NSSet(array: allPlayers)
             
-            // Create first round
+            // Create initial round
+            print("🎮 Creating initial round")
             let round = Round(context: context)
             round.id = UUID()
             round.number = 1
-            round.scores = [:]
+            round.dealerIndex = dealerIndex
             round.isCompleted = false
             round.isSkipped = false
-            round.dealerIndex = dealerIndex
+            round.scores = [:]
             round.game = game
-            game.addToRounds(round)
             
-            // Print initial game state
-            print("🎮 Created new game with ID: \(game.id)")
-            print("🎮 Initial round created with ID: \(round.id)")
-            print("🎮 Players: \(allPlayers.map { $0.name }.joined(separator: ", "))")
+            // Validate the entire game state
+            try game.validateState()
+            print("🎮 Game state validated successfully")
+            
+            // Save context to ensure everything is persisted
+            try context.save()
+            print("🎮 Game creation transaction completed successfully")
             
             return game
         }

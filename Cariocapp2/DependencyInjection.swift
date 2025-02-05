@@ -53,7 +53,7 @@ final class DependencyContainer: ObservableObject {
     }
     
     func provideBackgroundContext() -> NSManagedObjectContext {
-        persistenceController.container.newBackgroundContext()
+        persistenceController.newBackgroundContext()
     }
     
     func provideGameCoordinator() -> GameCoordinator {

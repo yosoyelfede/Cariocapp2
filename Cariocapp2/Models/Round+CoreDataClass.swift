@@ -14,7 +14,15 @@ final class ScoresDictionaryValueTransformer: NSSecureUnarchiveFromDataTransform
     public static func register() {
         let transformer = ScoresDictionaryValueTransformer()
         ValueTransformer.setValueTransformer(transformer, forName: name)
+        print("🎲 ScoresDictionaryValueTransformer registered successfully")
     }
+}
+
+// Register transformer at module load time
+extension ScoresDictionaryValueTransformer {
+    static let registerTransformer: Void = {
+        register()
+    }()
 }
 
 @objc(Round)
@@ -22,6 +30,18 @@ public class Round: NSManagedObject {
     // MARK: - Constants
     private static let minRoundNumber: Int16 = 1
     private static let maxRoundNumber: Int16 = 12
+    
+    override public class func entity() -> NSEntityDescription {
+        // Ensure transformer is registered before accessing entity
+        _ = ScoresDictionaryValueTransformer.registerTransformer
+        return NSEntityDescription.entity(forEntityName: "Round", in: PersistenceController.shared.container.viewContext)!
+    }
+    
+    public override init(entity: NSEntityDescription, insertInto context: NSManagedObjectContext?) {
+        // Ensure transformer is registered before initialization
+        _ = ScoresDictionaryValueTransformer.registerTransformer
+        super.init(entity: entity, insertInto: context)
+    }
     
     // MARK: - Validation Errors
     enum ValidationError: LocalizedError {

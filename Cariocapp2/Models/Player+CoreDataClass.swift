@@ -3,6 +3,12 @@ import CoreData
 
 @objc(Player)
 public class Player: NSManagedObject {
+    static let entityName = "Player"
+    
+    override public class func entity() -> NSEntityDescription {
+        return NSEntityDescription.entity(forEntityName: entityName, in: PersistenceController.shared.container.viewContext)!
+    }
+    
     // MARK: - Constants
     private static let minNameLength = 2
     private static let maxNameLength = 30
@@ -102,31 +108,28 @@ public class Player: NSManagedObject {
         }
         
         // Validate name
-        guard !name.isEmpty else {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
             throw ValidationError.emptyName
         }
         
-        guard name.count >= Self.minNameLength else {
-            throw ValidationError.nameTooShort(name)
+        guard trimmedName.count >= Self.minNameLength else {
+            throw ValidationError.nameTooShort(trimmedName)
         }
         
-        guard name.count <= Self.maxNameLength else {
-            throw ValidationError.nameTooLong(name)
+        guard trimmedName.count <= Self.maxNameLength else {
+            throw ValidationError.nameTooLong(trimmedName)
         }
         
         // Check name format
-        let range = NSRange(location: 0, length: name.utf16.count)
-        guard Self.nameRegex.firstMatch(in: name, options: [], range: range) != nil else {
-            throw ValidationError.invalidNameFormat(name)
+        let range = NSRange(location: 0, length: trimmedName.utf16.count)
+        guard Self.nameRegex.firstMatch(in: trimmedName, options: [], range: range) != nil else {
+            throw ValidationError.invalidNameFormat(trimmedName)
         }
         
-        // Check for duplicates
-        if let context = managedObjectContext {
-            let request = NSFetchRequest<Player>(entityName: "Player")
-            request.predicate = NSPredicate(format: "name == %@ AND id != %@", name, id as CVarArg)
-            if let count = try? context.count(for: request), count > 0 {
-                throw ValidationError.duplicatePlayer(name)
-            }
+        // Validate required properties
+        guard createdAt != nil else {
+            throw ValidationError.invalidName("Creation date is missing")
         }
         
         // Validate statistics
@@ -136,6 +139,15 @@ public class Player: NSManagedObject {
               totalScore >= 0,
               averagePosition >= 0 else {
             throw ValidationError.invalidStatistics
+        }
+        
+        // Only check for duplicates if this is not a guest player
+        if !isGuest, let context = managedObjectContext {
+            let request = NSFetchRequest<Player>(entityName: "Player")
+            request.predicate = NSPredicate(format: "name ==[c] %@ AND id != %@ AND isGuest == NO", trimmedName, id as CVarArg)
+            if let count = try? context.count(for: request), count > 0 {
+                throw ValidationError.duplicatePlayer(trimmedName)
+            }
         }
     }
     

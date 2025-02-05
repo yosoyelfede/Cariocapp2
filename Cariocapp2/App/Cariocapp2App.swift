@@ -10,6 +10,10 @@ struct Cariocapp2App: App {
     init() {
         // Register value transformers
         ScoresDictionaryValueTransformer.register()
+        
+        // Configure logging
+        print("🎮 App starting up")
+        print("🎮 Transformer registered")
     }
     
     // MARK: - Body
@@ -29,12 +33,7 @@ struct Cariocapp2App: App {
                 }
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     Task {
-                        do {
-                            try await handleScenePhase(newPhase)
-                        } catch {
-                            print("Failed to handle scene phase change: \(error)")
-                            container.provideStateManager().setError(.stateSaveFailed(error.localizedDescription))
-                        }
+                        try? await handlePhaseChange(from: oldPhase, to: newPhase)
                     }
                 }
         }
@@ -42,25 +41,22 @@ struct Cariocapp2App: App {
     
     // MARK: - App Lifecycle
     private func handleAppLaunch() async throws {
-        // 1. Restore application state
-        try await container.provideStateManager().restoreApplicationState()
-        
-        // 2. Check resources
-        let resourceManager = await container.provideResourceManager()
-        try await resourceManager.checkResources()
+        print("🎮 Handling app launch")
+        let stateManager = container.provideStateManager()
+        await stateManager.restoreState()
     }
     
-    private func handleScenePhase(_ newPhase: ScenePhase) async throws {
+    private func handlePhaseChange(from oldPhase: ScenePhase, to newPhase: ScenePhase) async throws {
         switch newPhase {
         case .active:
             print("App became active")
-            // Handle active state
-        case .inactive:
-            print("App became inactive")
-            try await container.handleAppResignActive()
+            try await container.provideResourceManager().checkResources()
         case .background:
             print("App entered background")
             try await container.handleAppBackground()
+        case .inactive:
+            print("App became inactive")
+            try await container.handleAppResignActive()
         @unknown default:
             break
         }

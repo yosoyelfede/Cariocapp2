@@ -31,19 +31,29 @@ private enum PreviewState {
 struct GameView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    @EnvironmentObject private var container: DependencyContainer
     @StateObject private var viewModel: GameViewModel
     
     let gameID: UUID
     
     init(gameID: UUID) {
         self.gameID = gameID
-        let coordinator = GameCoordinator(viewContext: PersistenceController.shared.container.viewContext)
+        let coordinator = DependencyContainer.shared.provideGameCoordinator()
         self._viewModel = StateObject(wrappedValue: GameViewModel.instance(for: gameID, coordinator: coordinator))
     }
     
     var body: some View {
         Group {
-            if let game = viewModel.game {
+            if viewModel.isLoading {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                    Text("Loading game...")
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground))
+            } else if let game = viewModel.game {
                 if game.isComplete {
                     ContentUnavailableView(
                         "Game Completed",
@@ -56,12 +66,20 @@ struct GameView: View {
                 } else {
                     gameContent(game)
                 }
-            } else {
-                VStack {
-                    ProgressView()
-                    Text("Loading game...")
-                        .foregroundColor(.secondary)
+            } else if viewModel.error != nil {
+                ContentUnavailableView(
+                    "Error Loading Game",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(viewModel.error?.localizedDescription ?? "Unknown error occurred")
+                )
+                .onAppear {
+                    navigationCoordinator.popToRoot()
                 }
+            } else {
+                ProgressView("Loading game...")
+                    .task {
+                        await loadGameWithRetries()
+                    }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -72,8 +90,9 @@ struct GameView: View {
                 Button {
                     navigationCoordinator.presentGameMenu(for: gameID)
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "line.3.horizontal")
                 }
+                .disabled(viewModel.isLoading)
             }
             
             ToolbarItem(placement: .principal) {
@@ -82,12 +101,24 @@ struct GameView: View {
             }
         }
         .task {
+            print("🎮 GameView - Task started for game: \(gameID)")
             viewModel.coordinator.updateContext(viewContext)
-            await loadGameWithRetries()
+            do {
+                try await viewModel.refreshGameState()
+            } catch {
+                print("❌ GameView - Failed to refresh game state: \(error)")
+            }
         }
-        .onChange(of: viewContext) { oldValue, newValue in
-            print("🎮 GameView - Context changed, updating coordinator")
-            viewModel.coordinator.updateContext(newValue)
+        .onChange(of: viewContext) { _ in
+            print("🎮 GameView - Context changed for game: \(gameID)")
+            viewModel.coordinator.updateContext(viewContext)
+            Task {
+                do {
+                    try await viewModel.refreshGameState()
+                } catch {
+                    print("❌ GameView - Failed to refresh game state after context change: \(error)")
+                }
+            }
         }
         .onChange(of: viewModel.shouldShowGameCompletion) { oldValue, newValue in
             if newValue {
@@ -97,7 +128,7 @@ struct GameView: View {
     }
     
     private func loadGameWithRetries() async {
-        let maxRetries = 5
+        let maxRetries = 3
         let retryDelay: UInt64 = 500_000_000 // 0.5 seconds
         
         for attempt in 1...maxRetries {
@@ -126,8 +157,7 @@ struct GameView: View {
         }
         
         print("🎮 GameView - Failed to load game after \(maxRetries) attempts")
-        // After all retries failed, navigate back
-        navigationCoordinator.popToRoot()
+        viewModel.setError(GameError.gameNotFound)
     }
     
     @ViewBuilder

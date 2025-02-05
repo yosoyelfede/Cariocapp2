@@ -147,7 +147,7 @@ struct ScoreEditView: View {
             // Refresh game state
             if let game = game {
                 Task {
-                    try await viewModel.refreshGameState(game: game)
+                    try await viewModel.refreshGameState()
                 }
             }
             

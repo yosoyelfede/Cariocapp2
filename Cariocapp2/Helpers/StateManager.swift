@@ -261,7 +261,7 @@ final class AppState: ObservableObject {
         }
     }
     
-    private func restoreState() async {
+    public func restoreState() async {
         print("📱 AppState - Restoring state")
         do {
             try await restoreApplicationState()

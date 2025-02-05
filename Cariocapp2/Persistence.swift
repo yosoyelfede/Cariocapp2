@@ -59,7 +59,20 @@ final class PersistenceController {
     static var preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
+        
+        // Configure view context
         viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        viewContext.automaticallyMergesChangesFromParent = true
+        
+        // Set up preview store URL
+        if let description = result.container.persistentStoreDescriptions.first {
+            let url = URL.temporaryDirectory.appendingPathComponent("preview_store.sqlite")
+            description.url = url
+            description.type = NSInMemoryStoreType
+            
+            // Ensure store is recreated for preview
+            try? FileManager.default.removeItem(at: url)
+        }
         
         do {
             // Create real players for preview
@@ -69,6 +82,9 @@ final class PersistenceController {
             fede.gamesPlayed = 0
             fede.gamesWon = 0
             fede.createdAt = Date()
+            fede.averagePosition = 0
+            fede.totalScore = 0
+            fede.isGuest = false
             
             let mari = Player(context: viewContext)
             mari.id = UUID()
@@ -76,11 +92,30 @@ final class PersistenceController {
             mari.gamesPlayed = 0
             mari.gamesWon = 0
             mari.createdAt = Date()
+            mari.averagePosition = 0
+            mari.totalScore = 0
+            mari.isGuest = false
             
             try viewContext.save()
+            print("🎮 Preview data created successfully")
         } catch {
             let nsError = error as NSError
-            fatalError("Failed to create preview data: \(nsError)")
+            print("❌ Failed to create preview data: \(error.localizedDescription)")
+            print("❌ Detailed error: \(nsError.userInfo)")
+            
+            // Try to recover
+            viewContext.rollback()
+            
+            // Reset the store
+            if let storeURL = result.container.persistentStoreDescriptions.first?.url {
+                do {
+                    try result.container.persistentStoreCoordinator.destroyPersistentStore(at: storeURL, ofType: NSInMemoryStoreType, options: nil)
+                    try result.container.persistentStoreCoordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: storeURL, options: nil)
+                    print("🎮 Successfully recreated preview store")
+                } catch {
+                    print("❌ Failed to recreate preview store: \(error)")
+                }
+            }
         }
         
         return result
@@ -92,15 +127,45 @@ final class PersistenceController {
     
     // MARK: - Initialization
     init(inMemory: Bool = false) {
+        print("🎮 Initializing PersistenceController (inMemory: \(inMemory))")
         container = NSPersistentContainer(name: "Cariocapp2")
         
-        if inMemory {
-            container.persistentStoreDescriptions.first?.url = URL(fileURLWithPath: "/dev/null")
-            container.persistentStoreDescriptions.first?.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
-            container.persistentStoreDescriptions.first?.type = NSInMemoryStoreType
+        // Configure store description
+        if let description = container.persistentStoreDescriptions.first {
+            // Set store type and options
+            description.type = inMemory ? NSInMemoryStoreType : NSSQLiteStoreType
+            
+            if inMemory {
+                let url = URL.temporaryDirectory.appendingPathComponent("temp_store.sqlite")
+                description.url = url
+                // Ensure store is recreated
+                try? FileManager.default.removeItem(at: url)
+            }
+            
+            // Configure automatic migration and merge policies
+            description.shouldMigrateStoreAutomatically = true
+            description.shouldInferMappingModelAutomatically = true
+            
+            // Set merge policies
+            container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+            container.viewContext.automaticallyMergesChangesFromParent = true
+            
+            // Configure SQLite options for persistent store
+            if !inMemory {
+                description.setOption(["journal_mode": "WAL"] as NSDictionary,
+                                    forKey: NSSQLitePragmasOption)
+            }
+            
+            // Configure notifications and history tracking
+            description.setOption(true as NSNumber,
+                                forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
+            description.setOption(true as NSNumber,
+                                forKey: NSPersistentHistoryTrackingKey)
+            
+            print("🎮 Store configuration complete")
         }
         
-        // Try to load the store
+        // Load store with retry
         var loadError: Error?
         let group = DispatchGroup()
         group.enter()
@@ -110,51 +175,23 @@ final class PersistenceController {
             if let error = error {
                 loadError = error
                 print("Failed to load Core Data store: \(error)")
-                
-                // Try to recover by deleting the store
-                if let storeURL = description.url {
-                    do {
-                        try FileManager.default.removeItem(at: storeURL)
-                        print("Removed corrupted store at: \(storeURL)")
-                        
-                        // Try loading again
-                        self.container.loadPersistentStores { description, error in
-                            if let error = error {
-                                print("Failed to load store after recovery: \(error)")
-                                loadError = error
-                            } else {
-                                loadError = nil
-                                print("Successfully recovered and loaded store")
-                            }
-                        }
-                    } catch {
-                        print("Failed to remove corrupted store: \(error)")
-                    }
-                }
+                print("Detailed error: \(error as NSError).userInfo")
+            } else {
+                print("Successfully loaded Core Data store")
             }
-            
-            description.setOption(true as NSNumber, forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
-            description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
         }
         
         group.wait()
         
         if let error = loadError {
-            print("CRITICAL: Failed to load or recover Core Data store: \(error)")
-            // Instead of crashing, we'll start with a fresh store
-            if let storeURL = container.persistentStoreDescriptions.first?.url {
-                do {
-                    try FileManager.default.removeItem(at: storeURL)
-                    print("Removed corrupted store as last resort")
-                    container.loadPersistentStores { _, _ in }
-                } catch {
-                    print("Failed to remove store as last resort: \(error)")
-                }
+            // Try to recover from load error
+            do {
+                try recoverFromLoadError(error)
+            } catch {
+                print("Unrecoverable store error: \(error)")
+                print("Detailed error: \(error as NSError).userInfo")
             }
         }
-        
-        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-        container.viewContext.automaticallyMergesChangesFromParent = true
         
         setupNotificationHandling()
     }
@@ -294,11 +331,32 @@ final class PersistenceController {
             throw PersistenceError.recoveryFailed(error)
         }
         
-        // Remove problematic store
-        try FileManager.default.removeItem(at: storeURL)
-        
-        // Try loading again
-        try loadPersistentStore()
+        do {
+            // Try to remove the store file
+            try container.persistentStoreCoordinator.destroyPersistentStore(
+                at: storeURL,
+                ofType: NSSQLiteStoreType,
+                options: [:]
+            )
+            
+            // Try loading again
+            var retryError: Error?
+            let group = DispatchGroup()
+            group.enter()
+            
+            container.loadPersistentStores { _, error in
+                defer { group.leave() }
+                retryError = error
+            }
+            
+            group.wait()
+            
+            if let error = retryError {
+                throw PersistenceError.recoveryFailed(error)
+            }
+        } catch {
+            throw PersistenceError.recoveryFailed(error)
+        }
     }
     
     // MARK: - Persistence Operations
@@ -307,6 +365,14 @@ final class PersistenceController {
         if context.hasChanges {
             try context.save()
         }
+    }
+    
+    // MARK: - Context Management
+    func newBackgroundContext() -> NSManagedObjectContext {
+        let context = container.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.automaticallyMergesChangesFromParent = true
+        return context
     }
     
     @BackupActor

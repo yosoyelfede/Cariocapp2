@@ -16,8 +16,8 @@ struct PlayerManagementView: View {
     
     init() {
         print("🔍 PlayerManagementView - Initializing")
-        // Initialize with empty context, will be updated in onAppear
-        let repository = CoreDataPlayerRepository(context: NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType))
+        // Initialize with shared PersistenceController
+        let repository = CoreDataPlayerRepository(context: PersistenceController.shared.container.viewContext)
         self._repository = StateObject(wrappedValue: repository)
     }
     
