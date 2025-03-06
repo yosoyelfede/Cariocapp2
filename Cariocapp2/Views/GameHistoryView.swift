@@ -170,7 +170,8 @@ struct GameHistoryView: View {
                         ForEach(completedGames) { game in
                             GameHistoryCard(game: game)
                                 .onTapGesture {
-                                    // Set the selected game and show the detail view immediately
+                                    // Prepare the game data synchronously before showing the detail view
+                                    prepareGameDataSynchronously(game)
                                     selectedGame = game
                                     dataIsPreloaded = true
                                     showingDetailView = true
@@ -192,6 +193,39 @@ struct GameHistoryView: View {
             .refreshable {
                 await loadCompletedGames()
             }
+        }
+        
+        // Synchronously prepare game data before showing detail view
+        private func prepareGameDataSynchronously(_ game: Game) {
+            Logger.logUIEvent("Preparing game data synchronously for game: \(game.id.uuidString)")
+            
+            // Force immediate loading of all relationships
+            _ = game.roundsArray
+            _ = game.playersArray
+            
+            // Access player snapshots to ensure they're loaded
+            let snapshots = game.playerSnapshotsArray
+            for snapshot in snapshots {
+                _ = snapshot.name
+                _ = snapshot.position
+                _ = snapshot.score
+            }
+            
+            // Access round scores to ensure they're loaded
+            for round in game.roundsArray {
+                _ = round.name
+                _ = round.firstCardColor
+                let scores = round.sortedScores
+                for score in scores {
+                    _ = score.player.name
+                    _ = score.score
+                }
+            }
+            
+            // Force loading of card color stats
+            _ = game.cardColorStats
+            
+            Logger.logUIEvent("Game data prepared synchronously for game: \(game.id.uuidString)")
         }
     }
     
@@ -365,12 +399,14 @@ private struct GameDetailView: View {
     let dataIsPreloaded: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel: GameDetailViewModel
+    @State private var isDataLoaded = false
     
     init(game: Game, dataIsPreloaded: Bool) {
         self.game = game
         self.dataIsPreloaded = dataIsPreloaded
         // Initialize the view model with the game data
         _viewModel = State(initialValue: GameDetailViewModel(game: game))
+        Logger.logUIEvent("GameDetailView initialized for game: \(game.id.uuidString)")
     }
     
     var body: some View {
@@ -392,9 +428,47 @@ private struct GameDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemGroupedBackground))
         .onAppear {
+            Logger.logUIEvent("GameDetailView appeared for game: \(game.id.uuidString)")
+            // Force synchronous data loading to ensure all data is available
+            forceSynchronousDataLoading()
             // Ensure the view model has loaded all data
             viewModel.loadAllData()
+            isDataLoaded = true
+            Logger.logUIEvent("GameDetailView data loaded for game: \(game.id.uuidString)")
         }
+    }
+    
+    // Force synchronous loading of all data
+    private func forceSynchronousDataLoading() {
+        Logger.logUIEvent("Forcing synchronous data loading for game: \(game.id.uuidString)")
+        
+        // Access all critical properties to force Core Data to load them
+        _ = game.endDate
+        _ = game.playersArray.map { $0.name }
+        
+        // Access player snapshots
+        let snapshots = game.playerSnapshotsArray
+        for snapshot in snapshots {
+            _ = snapshot.name
+            _ = snapshot.position
+            _ = snapshot.score
+        }
+        
+        // Access rounds and scores
+        for round in game.roundsArray {
+            _ = round.name
+            _ = round.firstCardColor
+            let scores = round.sortedScores
+            for score in scores {
+                _ = score.player.name
+                _ = score.score
+            }
+        }
+        
+        // Access card color stats
+        _ = game.cardColorStats
+        
+        Logger.logUIEvent("Synchronous data loading completed for game: \(game.id.uuidString)")
     }
     
     // MARK: - Summary Card
@@ -632,6 +706,8 @@ private class GameDetailViewModel: ObservableObject {
     
     // Initialize with a game
     init(game: Game) {
+        Logger.logUIEvent("Initializing GameDetailViewModel for game: \(game.id.uuidString)")
+        
         // Initialize with default values
         self.formattedEndDate = game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown"
         self.playerNames = game.playersArray.map { $0.name }.joined(separator: ", ")
@@ -643,37 +719,47 @@ private class GameDetailViewModel: ObservableObject {
         
         // Extract player snapshots
         self.playerSnapshots = game.playerSnapshotsArray.sorted { $0.position < $1.position }.map { snapshot in
-            PlayerSnapshotData(
+            let snapshotScore = Int(snapshot.score) // Ensure we convert Int32 to Int
+            Logger.logUIEvent("Processing player snapshot: \(snapshot.name), score: \(snapshotScore)")
+            return PlayerSnapshotData(
                 id: snapshot.id,
                 name: snapshot.name,
                 position: snapshot.position,
-                score: snapshot.score
+                score: snapshotScore
             )
         }
         
         // Extract round data
         self.playedRounds = game.sortedRounds.filter { $0.isCompleted && !$0.isSkipped }.map { round in
+            Logger.logUIEvent("Processing round: \(round.name)")
             let scores = round.sortedScores.map { score in
-                RoundData.ScoreData(
+                let scoreValue = Int(score.score) // Ensure we convert Int32 to Int
+                Logger.logUIEvent("Processing score for player: \(score.player.name), score: \(scoreValue)")
+                return RoundData.ScoreData(
                     id: score.player.id,
                     playerName: score.player.name,
-                    score: Int(score.score)
+                    score: scoreValue
                 )
             }
+            
+            let topScore = round.sortedScores.first != nil ? Int(round.sortedScores.first!.score) : nil
             
             return RoundData(
                 id: round.id,
                 name: round.name,
                 firstCardColor: round.firstCardColor,
                 topScorePlayerName: round.sortedScores.first?.player.name,
-                topScore: round.sortedScores.first != nil ? Int(round.sortedScores.first!.score) : nil,
+                topScore: topScore,
                 scores: scores
             )
         }
+        
+        Logger.logUIEvent("GameDetailViewModel initialization complete for game: \(game.id.uuidString)")
     }
     
     // Force loading of all data
     func loadAllData() {
+        Logger.logUIEvent("GameDetailViewModel.loadAllData() called")
         // This method is called to ensure all data is loaded
         // The data is already loaded in the initializer, so this is just a placeholder
     }
