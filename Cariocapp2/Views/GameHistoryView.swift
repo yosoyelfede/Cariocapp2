@@ -211,30 +211,28 @@ struct GameHistoryView: View {
             Logger.logUIEvent("Creating fully loaded view model for game: \(game.id.uuidString)")
             
             // Force immediate loading of all relationships
-            _ = game.roundsArray
-            _ = game.playersArray
+            let rounds = game.roundsArray
+            let players = game.playersArray
             
             // Access player snapshots to ensure they're loaded
             let snapshots = game.playerSnapshotsArray
-            for snapshot in snapshots {
-                _ = snapshot.name
-                _ = snapshot.position
-                _ = snapshot.score
-            }
             
             // Access round scores to ensure they're loaded
-            for round in game.roundsArray {
+            for round in rounds {
                 _ = round.name
                 _ = round.firstCardColor
-                let scores = round.sortedScores
-                for score in scores {
-                    _ = score.player.name
-                    _ = score.score
-                }
+                _ = round.sortedScores
             }
             
             // Force loading of card color stats
             _ = game.cardColorStats
+            
+            // Print debug info to verify data is loaded
+            Logger.logUIEvent("Game data loaded: \(game.id)")
+            Logger.logUIEvent("- End date: \(String(describing: game.endDate))")
+            Logger.logUIEvent("- Players: \(players.count)")
+            Logger.logUIEvent("- Rounds: \(rounds.count)")
+            Logger.logUIEvent("- Snapshots: \(snapshots.count)")
             
             // Create and return the view model
             let viewModel = GameDetailViewModel(game: game)
@@ -412,8 +410,6 @@ private struct GameDetailView: View {
     let game: Game
     let dataIsPreloaded: Bool
     let preloadedViewModel: GameDetailViewModel
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var isDataLoaded = false
     
     init(game: Game, dataIsPreloaded: Bool, preloadedViewModel: GameDetailViewModel) {
         self.game = game
@@ -442,11 +438,6 @@ private struct GameDetailView: View {
         .background(Color(.systemGroupedBackground))
         .onAppear {
             Logger.logUIEvent("GameDetailView appeared for game: \(game.id.uuidString)")
-            
-            // No need to force synchronous data loading since we're using a preloaded view model
-            // Just mark the data as loaded
-            isDataLoaded = true
-            Logger.logUIEvent("GameDetailView using preloaded data for game: \(game.id.uuidString)")
         }
     }
     
@@ -734,13 +725,6 @@ private class GameDetailViewModel: ObservableObject {
         }
         
         Logger.logUIEvent("GameDetailViewModel initialization complete for game: \(game.id.uuidString)")
-    }
-    
-    // Force loading of all data
-    func loadAllData() {
-        Logger.logUIEvent("GameDetailViewModel.loadAllData() called")
-        // This method is called to ensure all data is loaded
-        // The data is already loaded in the initializer, so this is just a placeholder
     }
 }
 
