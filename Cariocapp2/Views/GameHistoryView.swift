@@ -10,6 +10,8 @@ struct GameHistoryView: View {
     @State private var isLoading = true
     @State private var gameToDelete: Game?
     @State private var showingDeleteConfirmation = false
+    @State private var errorMessage: String?
+    @State private var showingError = false
     
     var body: some View {
         NavigationSplitView {
@@ -55,16 +57,21 @@ struct GameHistoryView: View {
             }
             .navigationTitle("Game History")
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if !completedGames.isEmpty {
+                ToolbarItem(placement: .principal) {
+                    if completedGames.isEmpty {
+                        Text("No completed games")
+                    } else if selectedGame == nil {
                         Text("Tap a game to view details")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
                 }
             }
+            .alert("Error", isPresented: $showingError, actions: {
+                Button("OK", role: .cancel) {}
+            }, message: {
+                Text(errorMessage ?? "An unknown error occurred")
+            })
             .refreshable {
-                await loadCompletedGames()
+                fetchCompletedGames()
             }
             .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
             .alert("Delete Game", isPresented: $showingDeleteConfirmation) {
@@ -94,9 +101,7 @@ struct GameHistoryView: View {
             }
         }
         .onAppear {
-            Task {
-                await loadCompletedGames()
-            }
+            fetchCompletedGames()
         }
     }
     
@@ -222,106 +227,106 @@ struct GameHistoryView: View {
     
     // Add a method to delete games
     private func deleteGame(_ game: Game) {
-        Task {
-            do {
-                print("🗑️ Deleting game: \(game.id)")
-                
-                // If this is the selected game, deselect it
-                if selectedGame?.id == game.id {
-                    selectedGame = nil
+        // Deselect the game if it is currently selected
+        if selectedGame?.id == game.id {
+            selectedGame = nil
+        }
+        
+        // Collect players to update their statistics later
+        let affectedPlayers = game.playersArray
+        
+        // Create a child context for deletion operations
+        let childContext = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        childContext.parent = viewContext
+        
+        // Set merge policy to override validation constraints
+        childContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        
+        do {
+            // Get the game in the child context
+            let fetchRequest = NSFetchRequest<Game>(entityName: "Game")
+            fetchRequest.predicate = NSPredicate(format: "id == %@", game.id as CVarArg)
+            
+            guard let gameInChildContext = try childContext.fetch(fetchRequest).first else {
+                print("❌ Failed to find game in child context")
+                return
+            }
+            
+            print("🗑️ Deleting game with ID: \(gameInChildContext.id)")
+            
+            // First, delete all rounds associated with the game
+            if let rounds = gameInChildContext.rounds as? Set<Round> {
+                for round in rounds {
+                    print("🗑️ Deleting round \(round.number)")
+                    childContext.delete(round)
                 }
-                
-                // Get all players from the game before deleting it
-                let playersToUpdate = Array(game.playersArray)
-                
-                // Disable Core Data validation temporarily for this context
-                viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-                
-                // Use a child context for deletion to prevent crashes
-                let childContext = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
-                childContext.parent = viewContext
-                childContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-                
-                // Get the game in the child context
-                let gameObjectID = game.objectID
-                guard let childGame = childContext.object(with: gameObjectID) as? Game else {
-                    print("❌ Could not get game in child context")
-                    return
-                }
-                
-                // 1. Delete all rounds first
-                if let childRounds = childGame.rounds as? Set<Round> {
-                    for round in childRounds {
-                        round.scores = nil
-                        childContext.delete(round)
-                    }
-                }
-                
-                // 2. Clear snapshots
-                childGame.playerSnapshots = nil
-                
-                // 3. Remove the game from each player's games relationship
-                if let childPlayers = childGame.players as? Set<Player> {
-                    for player in childPlayers {
-                        if var playerGames = player.games as? Set<Game> {
-                            playerGames.remove(childGame)
-                            player.games = playerGames as NSSet
-                        }
-                    }
-                    
-                    // Clear the game's players relationship
-                    childGame.players = NSSet()
-                }
-                
-                // 4. Delete the game directly
-                childContext.delete(childGame)
-                
-                // 5. Save the child context
-                if childContext.hasChanges {
-                    try childContext.save()
-                }
-                
-                // 6. Save the parent context
-                if viewContext.hasChanges {
-                    try viewContext.save()
-                }
-                
-                // 7. Update statistics for affected players
-                print("🗑️ Updating statistics for \(playersToUpdate.count) affected players")
-                for player in playersToUpdate {
-                    if !player.isDeleted && player.managedObjectContext != nil {
-                        player.updateStatistics()
-                    }
-                }
-                
-                // 8. Save again after updating player statistics
-                if viewContext.hasChanges {
-                    try viewContext.save()
-                }
-                
-                // 9. Refresh the list
-                await loadCompletedGames()
-                
-                print("🗑️ Game deleted successfully")
-            } catch {
-                print("❌ Error deleting game: \(error)")
-                
-                // Show an error alert to the user
-                await MainActor.run {
-                    let errorAlert = UIAlertController(
-                        title: "Error",
-                        message: "Failed to delete game: \(error.localizedDescription)",
-                        preferredStyle: .alert
-                    )
-                    errorAlert.addAction(UIAlertAction(title: "OK", style: .default))
-                    
-                    // Present the alert
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootViewController = windowScene.windows.first?.rootViewController {
-                        rootViewController.present(errorAlert, animated: true)
+            }
+            
+            // Clear player snapshots
+            gameInChildContext.playerSnapshots = nil
+            
+            // Remove the game from each player's games relationship
+            if let players = gameInChildContext.players as? Set<Player> {
+                for player in players {
+                    print("🗑️ Removing game from player: \(player.name)")
+                    if var playerGames = player.games as? Set<Game> {
+                        playerGames.remove(gameInChildContext)
+                        player.games = playerGames as NSSet
                     }
                 }
             }
+            
+            // Clear the game's players relationship
+            gameInChildContext.players = NSSet()
+            
+            // Now delete the game itself
+            childContext.delete(gameInChildContext)
+            
+            // Save the child context
+            if childContext.hasChanges {
+                try childContext.save()
+            }
+            
+            // Save the parent context
+            if viewContext.hasChanges {
+                try viewContext.save()
+            }
+            
+            // Update statistics for affected players
+            var hasChanges = false
+            for player in affectedPlayers {
+                print("🔄 Updating statistics for player: \(player.name)")
+                player.updateStatistics()
+                hasChanges = true
+            }
+            
+            // Save again if there were changes to player statistics
+            if hasChanges && viewContext.hasChanges {
+                try viewContext.save()
+            }
+            
+            // Refresh the list of completed games
+            fetchCompletedGames()
+            
+        } catch {
+            print("❌ Error deleting game: \(error.localizedDescription)")
+            errorMessage = "Failed to delete game: \(error.localizedDescription)"
+            showingError = true
+        }
+    }
+    
+    private func fetchCompletedGames() {
+        let fetchRequest = NSFetchRequest<Game>(entityName: "Game")
+        fetchRequest.predicate = NSPredicate(format: "isActive == NO")
+        fetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Game.endDate, ascending: false)]
+        
+        do {
+            completedGames = try viewContext.fetch(fetchRequest)
+        } catch {
+            print("❌ Error fetching completed games: \(error.localizedDescription)")
+            errorMessage = "Failed to load games: \(error.localizedDescription)"
+            showingError = true
+            completedGames = []
         }
     }
 }
@@ -432,7 +437,7 @@ private struct GameDetailView: View {
                     Label("Rounds", systemImage: "list.number")
                         .font(.headline)
                     
-                    Text("\(game.roundsArray.count)")
+                    Text("\(game.roundsArray.filter { $0.isCompleted && !$0.isSkipped }.count)")
                         .foregroundColor(.secondary)
                 }
             }
