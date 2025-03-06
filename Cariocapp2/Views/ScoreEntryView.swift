@@ -222,12 +222,13 @@ private struct ScoreEntryRow: View {
             Spacer()
             
             HStack(spacing: 0) {
-                Button {
-                    onDecrement()
-                } label: {
+                // Decrement button with improved tap handling
+                Button(action: onDecrement) {
                     Image(systemName: "minus")
-                        .padding(8)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(BorderlessButtonStyle()) // This is crucial for allowing multiple taps
                 .disabled(score.wrappedValue <= 0)
                 
                 TextField("Score", value: score, format: .number)
@@ -244,12 +245,13 @@ private struct ScoreEntryRow: View {
                             .stroke(score.wrappedValue == 0 ? Color.green : Color.clear, lineWidth: 2)
                     )
                 
-                Button {
-                    onIncrement()
-                } label: {
+                // Increment button with improved tap handling
+                Button(action: onIncrement) {
                     Image(systemName: "plus")
-                        .padding(8)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(BorderlessButtonStyle()) // This is crucial for allowing multiple taps
             }
             .background(
                 RoundedRectangle(cornerRadius: 8)
