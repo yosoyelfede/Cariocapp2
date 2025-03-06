@@ -57,11 +57,11 @@ struct GameHistoryView: View {
             }
             .navigationTitle("Game History")
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    if completedGames.isEmpty {
-                        Text("No completed games")
-                    } else if selectedGame == nil {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !completedGames.isEmpty {
                         Text("Tap a game to view details")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
@@ -535,11 +535,12 @@ private struct GameDetailView: View {
             
             Divider()
             
-            // Round list
-            ForEach(game.sortedRounds, id: \.id) { round in
+            // Round list - only show completed, non-skipped rounds
+            let playedRounds = game.sortedRounds.filter { $0.isCompleted && !$0.isSkipped }
+            ForEach(playedRounds, id: \.id) { round in
                 RoundDetailRow(round: round)
                 
-                if round.number < game.sortedRounds.count {
+                if round != playedRounds.last {
                     Divider()
                 }
             }
@@ -571,7 +572,7 @@ private struct RoundDetailRow: View {
             // Round header (always visible)
             Button(action: { isExpanded.toggle() }) {
                 HStack {
-                    Text("Round \(round.number)")
+                    Text(round.name)
                         .font(.headline)
                     
                     Spacer()

@@ -228,7 +228,7 @@ private struct ScoreEntryRow: View {
                     Image(systemName: "minus")
                         .padding(8)
                 }
-                .disabled(score.wrappedValue == 0)
+                .disabled(score.wrappedValue <= 0)
                 
                 TextField("Score", value: score, format: .number)
                     .keyboardType(.numberPad)
