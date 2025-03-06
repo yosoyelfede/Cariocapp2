@@ -4,62 +4,99 @@ import CoreData
 // MARK: - Game History View
 struct GameHistoryView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Game.endDate, ascending: false)],
-        predicate: NSPredicate(format: "endDate != nil"),
-        animation: .default
-    ) private var games: FetchedResults<Game>
+    @State private var completedGames: [Game] = []
+    @State private var selectedGame: Game?
+    @State private var isLoading = true
     
     var body: some View {
-        NavigationView {
-            List {
-                if games.isEmpty {
-                    ContentUnavailableView(
-                        "No Completed Games",
-                        systemImage: "gamecontroller",
-                        description: Text("Complete a game to see it here")
-                    )
-                } else {
-                    ForEach(games) { game in
-                        GameHistoryRowView(game: game)
+        NavigationSplitView(columnVisibility: .constant(.all)) {
+            ZStack {
+                List(completedGames, selection: $selectedGame) { game in
+                    GameHistoryListRow(game: game)
+                        .tag(game)
+                }
+                .overlay {
+                    if completedGames.isEmpty && !isLoading {
+                        ContentUnavailableView(
+                            "No Completed Games",
+                            systemImage: "gamecontroller",
+                            description: Text("Complete a game to see it here")
+                        )
                     }
+                }
+                
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(1.5)
                 }
             }
             .navigationTitle("Game History")
             .refreshable {
-                viewContext.refreshAllObjects()
-                
-                // Debug information
-                print("🔍 Refreshing Game History")
-                let request = NSFetchRequest<Game>(entityName: "Game")
-                request.predicate = NSPredicate(format: "endDate != nil")
-                
-                if let allGames = try? viewContext.fetch(request) {
-                    print("🔍 Found \(allGames.count) completed games")
-                    for game in allGames {
-                        print("🔍 Game: \(game.id), endDate: \(String(describing: game.endDate)), isActive: \(game.isActive), players: \(game.playersArray.map { $0.name })")
-                    }
-                }
-                
-                // Fix any games that might be incorrectly marked
-                fixGameStates()
+                await loadCompletedGames()
             }
-            .onAppear {
-                viewContext.refreshAllObjects()
+        } detail: {
+            if let game = selectedGame {
+                GameDetailView(game: game)
+            } else {
+                ContentUnavailableView(
+                    "No Game Selected",
+                    systemImage: "gamecontroller",
+                    description: Text("Select a game to view details")
+                )
+            }
+        }
+        .onAppear {
+            Task {
+                await loadCompletedGames()
+            }
+        }
+    }
+    
+    private func loadCompletedGames() async {
+        isLoading = true
+        
+        // Run on background thread
+        await Task.yield()
+        
+        // Fix any games that might be incorrectly marked
+        fixGameStates()
+        
+        // Fetch completed games
+        let request = NSFetchRequest<Game>(entityName: "Game")
+        request.predicate = NSPredicate(format: "isActive == NO AND endDate != nil")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Game.endDate, ascending: false)]
+        
+        do {
+            let games = try viewContext.fetch(request)
+            print("🔍 Found \(games.count) completed games")
+            
+            // Debug information
+            for game in games {
+                print("🔍 Game: \(game.id), endDate: \(String(describing: game.endDate)), isActive: \(game.isActive), players: \(game.playersArray.map { $0.name })")
+                print("🔍 Game snapshots: \(game.playerSnapshotsArray.count)")
                 
-                // Debug information
-                print("🔍 Game History View Appeared")
-                let request = NSFetchRequest<Game>(entityName: "Game")
-                
-                if let allGames = try? viewContext.fetch(request) {
-                    print("🔍 Found \(allGames.count) total games")
-                    let activeGames = allGames.filter { $0.isActive }
-                    let inactiveGames = allGames.filter { !$0.isActive }
-                    print("🔍 Active games: \(activeGames.count), Inactive games: \(inactiveGames.count)")
+                // Create snapshots if missing
+                if game.playerSnapshotsArray.isEmpty {
+                    print("🔍 Creating missing snapshots for game \(game.id)")
+                    game.createSnapshot()
+                    try viewContext.save()
                 }
+            }
+            
+            // Update UI on main thread
+            await MainActor.run {
+                self.completedGames = games
+                self.isLoading = false
                 
-                // Fix any games that might be incorrectly marked
-                fixGameStates()
+                // Select the first game if available and none is selected
+                if self.selectedGame == nil && !games.isEmpty {
+                    self.selectedGame = games.first
+                }
+            }
+        } catch {
+            print("❌ Error fetching completed games: \(error)")
+            await MainActor.run {
+                self.isLoading = false
             }
         }
     }
@@ -81,12 +118,6 @@ struct GameHistoryView: View {
                     if game.playerSnapshotsArray.isEmpty {
                         print("🔧 Creating missing player snapshots for game \(game.id)")
                         game.createSnapshot()
-                    }
-                    
-                    // Update player statistics
-                    for player in game.playersArray {
-                        print("🔧 Updating statistics for player \(player.name)")
-                        player.updateStatistics()
                     }
                     
                     needsSave = true
@@ -144,37 +175,157 @@ struct GameHistoryView: View {
     }
 }
 
-private struct GameHistoryRowView: View {
+// MARK: - Game History List Row
+private struct GameHistoryListRow: View {
     let game: Game
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text("\(game.roundsArray.count) rounds")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
+        VStack(alignment: .leading, spacing: 4) {
+            // Date
+            Text(game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date")
+                .font(.headline)
             
-            let snapshots = game.playerSnapshotsArray
-            if !snapshots.isEmpty {
-                ForEach(snapshots.sorted { $0.position < $1.position }, id: \.id) { snapshot in
-                    HStack {
-                        Text("\(snapshot.position). \(snapshot.name)")
-                        Spacer()
-                        Text("\(snapshot.score)")
-                    }
-                }
-            } else {
-                Text("No player data available")
-                    .foregroundColor(.secondary)
-                    .italic()
-            }
+            // Players
+            Text(game.playersArray.map { $0.name }.joined(separator: ", "))
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
         }
         .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Game Detail View
+private struct GameDetailView: View {
+    let game: Game
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Game summary
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Game Summary")
+                        .font(.title)
+                        .fontWeight(.bold)
+                    
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Date:")
+                                .fontWeight(.medium)
+                            Text(game.endDate?.formatted(date: .long, time: .shortened) ?? "Unknown")
+                        }
+                        
+                        Spacer()
+                        
+                        VStack(alignment: .trailing) {
+                            Text("Rounds:")
+                                .fontWeight(.medium)
+                            Text("\(game.roundsArray.count)")
+                        }
+                    }
+                    
+                    // Card color statistics
+                    let colorStats = game.cardColorStats
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Red cards:")
+                                .fontWeight(.medium)
+                            Text(String(format: "%.1f%%", colorStats.redPercentage))
+                                .foregroundColor(.red)
+                        }
+                        
+                        Spacer()
+                        
+                        VStack(alignment: .trailing) {
+                            Text("Black cards:")
+                                .fontWeight(.medium)
+                            Text(String(format: "%.1f%%", colorStats.blackPercentage))
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(10)
+                
+                // Final standings
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Final Standings")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    let snapshots = game.playerSnapshotsArray.sorted { $0.position < $1.position }
+                    ForEach(snapshots, id: \.id) { snapshot in
+                        HStack {
+                            Text("\(snapshot.position).")
+                                .fontWeight(.bold)
+                            Text(snapshot.name)
+                            Spacer()
+                            Text("\(snapshot.score)")
+                                .fontWeight(.semibold)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(10)
+                
+                // Round details
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Round Details")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    ForEach(game.sortedRounds, id: \.id) { round in
+                        RoundDetailRow(round: round)
+                    }
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(10)
+            }
+            .padding()
+        }
+        .navigationTitle("Game Details")
+    }
+}
+
+// MARK: - Round Detail Row
+private struct RoundDetailRow: View {
+    let round: Round
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Round \(round.number)")
+                    .font(.headline)
+                
+                Spacer()
+                
+                if let firstCardColor = round.firstCardColor {
+                    Text("First card: \(firstCardColor)")
+                        .font(.subheadline)
+                        .foregroundColor(firstCardColor == "red" ? .red : .primary)
+                }
+            }
+            
+            Divider()
+            
+            // Player scores for this round
+            let sortedScores = round.sortedScores
+            ForEach(sortedScores, id: \.player.id) { scoreEntry in
+                HStack {
+                    Text(scoreEntry.player.name)
+                    Spacer()
+                    Text("\(scoreEntry.score)")
+                        .fontWeight(.medium)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding()
+        .background(Color(.tertiarySystemBackground))
+        .cornerRadius(8)
     }
 }
 
