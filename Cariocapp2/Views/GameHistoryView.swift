@@ -4,17 +4,20 @@ import CoreData
 // MARK: - Game History View
 struct GameHistoryView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var completedGames: [Game] = []
     @State private var selectedGame: Game?
     @State private var isLoading = true
     
     var body: some View {
-        NavigationSplitView(columnVisibility: .constant(.all)) {
+        NavigationSplitView {
+            // Sidebar (Game List)
             ZStack {
                 List(completedGames, selection: $selectedGame) { game in
                     GameHistoryListRow(game: game)
                         .tag(game)
                 }
+                .listStyle(SidebarListStyle())
                 .overlay {
                     if completedGames.isEmpty && !isLoading {
                         ContentUnavailableView(
@@ -34,9 +37,12 @@ struct GameHistoryView: View {
             .refreshable {
                 await loadCompletedGames()
             }
+            .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
         } detail: {
+            // Detail View
             if let game = selectedGame {
                 GameDetailView(game: game)
+                    .id(game.id) // Force refresh when selection changes
             } else {
                 ContentUnavailableView(
                     "No Game Selected",
@@ -145,9 +151,6 @@ struct GameHistoryView: View {
                     
                     // Refresh the view context after saving
                     viewContext.refreshAllObjects()
-                    
-                    // Update all player statistics
-                    updateAllPlayerStatistics()
                 } catch {
                     print("❌ Error saving game state fixes: \(error)")
                 }
@@ -155,6 +158,7 @@ struct GameHistoryView: View {
         }
     }
     
+    // This method is now only called explicitly when needed
     private func updateAllPlayerStatistics() {
         let request = NSFetchRequest<Player>(entityName: "Player")
         
@@ -180,152 +184,283 @@ private struct GameHistoryListRow: View {
     let game: Game
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             // Date
-            Text(game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date")
-                .font(.headline)
+            HStack(alignment: .center, spacing: 4) {
+                Image(systemName: "calendar")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                
+                Text(game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date")
+                    .font(.headline)
+            }
             
             // Players
-            Text(game.playersArray.map { $0.name }.joined(separator: ", "))
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .lineLimit(1)
+            HStack(alignment: .center, spacing: 4) {
+                Image(systemName: "person.2")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                
+                Text(game.playersArray.map { $0.name }.joined(separator: ", "))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
     }
 }
 
 // MARK: - Game Detail View
 private struct GameDetailView: View {
     let game: Game
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Game summary
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Game Summary")
-                        .font(.title)
-                        .fontWeight(.bold)
-                    
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text("Date:")
-                                .fontWeight(.medium)
-                            Text(game.endDate?.formatted(date: .long, time: .shortened) ?? "Unknown")
-                        }
-                        
-                        Spacer()
-                        
-                        VStack(alignment: .trailing) {
-                            Text("Rounds:")
-                                .fontWeight(.medium)
-                            Text("\(game.roundsArray.count)")
-                        }
-                    }
-                    
-                    // Card color statistics
-                    let colorStats = game.cardColorStats
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text("Red cards:")
-                                .fontWeight(.medium)
-                            Text(String(format: "%.1f%%", colorStats.redPercentage))
-                                .foregroundColor(.red)
-                        }
-                        
-                        Spacer()
-                        
-                        VStack(alignment: .trailing) {
-                            Text("Black cards:")
-                                .fontWeight(.medium)
-                            Text(String(format: "%.1f%%", colorStats.blackPercentage))
-                        }
-                    }
-                }
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .cornerRadius(10)
+            VStack(alignment: .leading, spacing: 20) {
+                // Game summary card
+                summaryCard
                 
-                // Final standings
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Final Standings")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    
-                    let snapshots = game.playerSnapshotsArray.sorted { $0.position < $1.position }
-                    ForEach(snapshots, id: \.id) { snapshot in
-                        HStack {
-                            Text("\(snapshot.position).")
-                                .fontWeight(.bold)
-                            Text(snapshot.name)
-                            Spacer()
-                            Text("\(snapshot.score)")
-                                .fontWeight(.semibold)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .cornerRadius(10)
+                // Final standings card
+                standingsCard
                 
-                // Round details
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Round Details")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    
-                    ForEach(game.sortedRounds, id: \.id) { round in
-                        RoundDetailRow(round: round)
-                    }
-                }
-                .padding()
-                .background(Color(.secondarySystemBackground))
-                .cornerRadius(10)
+                // Round details card
+                roundDetailsCard
             }
             .padding()
+            .frame(maxWidth: 800, alignment: .center) // Limit width for better readability on large screens
         }
         .navigationTitle("Game Details")
+        .background(Color(.systemGroupedBackground))
+    }
+    
+    // MARK: - Summary Card
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                Label("Game Summary", systemImage: "gamecontroller")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                
+                Spacer()
+                
+                Text(game.endDate?.formatted(date: .long, time: .shortened) ?? "Unknown")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            Divider()
+            
+            // Game info
+            HStack(spacing: 20) {
+                // Players
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Players", systemImage: "person.2")
+                        .font(.headline)
+                    
+                    Text(game.playersArray.map { $0.name }.joined(separator: ", "))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Rounds
+                VStack(alignment: .trailing, spacing: 4) {
+                    Label("Rounds", systemImage: "list.number")
+                        .font(.headline)
+                    
+                    Text("\(game.roundsArray.count)")
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Divider()
+            
+            // Card color statistics
+            let colorStats = game.cardColorStats
+            HStack(spacing: 20) {
+                // Red cards
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Red Cards", systemImage: "suit.diamond")
+                        .font(.headline)
+                        .foregroundColor(.red)
+                    
+                    Text(String(format: "%.1f%%", colorStats.redPercentage))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Black cards
+                VStack(alignment: .trailing, spacing: 4) {
+                    Label("Black Cards", systemImage: "suit.spade")
+                        .font(.headline)
+                    
+                    Text(String(format: "%.1f%%", colorStats.blackPercentage))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+    
+    // MARK: - Standings Card
+    private var standingsCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            Label("Final Standings", systemImage: "trophy")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Divider()
+            
+            // Player standings
+            let snapshots = game.playerSnapshotsArray.sorted { $0.position < $1.position }
+            ForEach(snapshots, id: \.id) { snapshot in
+                HStack {
+                    // Position
+                    ZStack {
+                        Circle()
+                            .fill(positionColor(for: snapshot.position))
+                            .frame(width: 28, height: 28)
+                        
+                        Text("\(snapshot.position)")
+                            .font(.subheadline)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                    }
+                    
+                    // Player name
+                    Text(snapshot.name)
+                        .font(.headline)
+                    
+                    Spacer()
+                    
+                    // Score
+                    Text("\(snapshot.score)")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 8)
+                
+                if snapshot.position < snapshots.count {
+                    Divider()
+                }
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+    
+    // MARK: - Round Details Card
+    private var roundDetailsCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            Label("Round Details", systemImage: "list.number")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Divider()
+            
+            // Round list
+            ForEach(game.sortedRounds, id: \.id) { round in
+                RoundDetailRow(round: round)
+                
+                if round.number < game.sortedRounds.count {
+                    Divider()
+                }
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+    
+    // Helper function for position colors
+    private func positionColor(for position: Int) -> Color {
+        switch position {
+        case 1: return .yellow
+        case 2: return .gray
+        case 3: return .brown
+        default: return .blue
+        }
     }
 }
 
 // MARK: - Round Detail Row
 private struct RoundDetailRow: View {
     let round: Round
+    @State private var isExpanded = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Round \(round.number)")
-                    .font(.headline)
-                
-                Spacer()
-                
-                if let firstCardColor = round.firstCardColor {
-                    Text("First card: \(firstCardColor)")
-                        .font(.subheadline)
-                        .foregroundColor(firstCardColor == "red" ? .red : .primary)
-                }
-            }
-            
-            Divider()
-            
-            // Player scores for this round
-            let sortedScores = round.sortedScores
-            ForEach(sortedScores, id: \.player.id) { scoreEntry in
+        VStack(alignment: .leading, spacing: 8) {
+            // Round header (always visible)
+            Button(action: { isExpanded.toggle() }) {
                 HStack {
-                    Text(scoreEntry.player.name)
+                    Text("Round \(round.number)")
+                        .font(.headline)
+                    
                     Spacer()
-                    Text("\(scoreEntry.score)")
-                        .fontWeight(.medium)
+                    
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        .foregroundColor(.secondary)
+                        .animation(.easeInOut, value: isExpanded)
                 }
-                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            
+            // Player scores (expandable)
+            if isExpanded {
+                VStack(spacing: 8) {
+                    // First card info
+                    if let firstCardColor = round.firstCardColor {
+                        HStack {
+                            Label("First card:", systemImage: "suit.club")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            
+                            Text(firstCardColor)
+                                .font(.subheadline)
+                                .foregroundColor(firstCardColor == "red" ? .red : .primary)
+                            
+                            Spacer()
+                        }
+                        .padding(.top, 4)
+                    }
+                    
+                    Divider()
+                    
+                    // Player scores
+                    let sortedScores = round.sortedScores
+                    ForEach(sortedScores, id: \.player.id) { scoreEntry in
+                        HStack {
+                            Text(scoreEntry.player.name)
+                                .font(.subheadline)
+                            
+                            Spacer()
+                            
+                            Text("\(scoreEntry.score)")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .padding(.leading, 8)
+                .transition(.opacity)
+                .animation(.easeInOut, value: isExpanded)
             }
         }
-        .padding()
-        .background(Color(.tertiarySystemBackground))
-        .cornerRadius(8)
     }
 }
 
