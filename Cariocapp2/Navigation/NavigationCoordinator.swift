@@ -128,13 +128,17 @@ final class NavigationCoordinator: ObservableObject {
     func completeGame(_ gameID: UUID) async throws {
         guard let game = try await fetchGame(gameID) else { return }
         
-        // Calculate final scores and update player statistics
-        let playerScores = calculatePlayerScores(for: game)
-        updatePlayerStatistics(for: game, with: playerScores)
+        // Create player snapshots for the game
+        game.createSnapshot()
         
         // Mark game as inactive and set end date
         game.isActive = false
         game.endDate = Date()
+        
+        // Update statistics for all players in the game
+        for player in game.playersArray {
+            player.updateStatistics()
+        }
         
         // Save changes
         try viewContext.save()
@@ -192,6 +196,7 @@ final class NavigationCoordinator: ObservableObject {
     }
     
     // MARK: - Statistics Methods
+    // These methods are no longer needed as we're using the player's updateStatistics() method
     private func calculatePlayerScores(for game: Game) -> [(player: Player, score: Int32)] {
         var totalScores: [(player: Player, score: Int32)] = []
         
@@ -204,7 +209,7 @@ final class NavigationCoordinator: ObservableObject {
             
             for round in completedRounds {
                 if let score = round.scores?[player.id.uuidString] {
-                    total += score  // No conversion needed
+                    total += score
                 }
             }
             
@@ -216,32 +221,23 @@ final class NavigationCoordinator: ObservableObject {
     }
     
     private func updatePlayerStatistics(for game: Game, with playerScores: [(player: Player, score: Int32)]) {
-        // Update each player's statistics
-        for (index, playerScore) in playerScores.enumerated() {
-            let stats = calculatePlayerStatistics(for: playerScore.player, index: index, score: playerScore.score)
-            updatePlayerStatistics(playerScore.player, stats: stats)
-        }
+        // This method is now deprecated - we use player.updateStatistics() directly
+        // Left for reference
     }
     
     private func calculatePlayerStatistics(for player: Player, index: Int, score: Int32) -> (gamesPlayed: Int32, gamesWon: Int32, totalScore: Int32, position: Double) {
+        // This method is now deprecated - we use player.updateStatistics() directly
+        // Left for reference
         return (
-            gamesPlayed: player.gamesPlayed + 1,
-            gamesWon: index == 0 ? player.gamesWon + 1 : player.gamesWon,
-            totalScore: player.totalScore + score,
-            position: Double(index + 1)
+            gamesPlayed: player.gamesPlayed,
+            gamesWon: player.gamesWon,
+            totalScore: player.totalScore,
+            position: player.averagePosition
         )
     }
     
     private func updatePlayerStatistics(_ player: Player, stats: (gamesPlayed: Int32, gamesWon: Int32, totalScore: Int32, position: Double)) {
-        player.gamesPlayed = stats.gamesPlayed
-        player.gamesWon = stats.gamesWon
-        player.totalScore = stats.totalScore
-        
-        if stats.gamesPlayed == 1 {
-            player.averagePosition = stats.position
-        } else {
-            let oldTotal = player.averagePosition * Double(stats.gamesPlayed - 1)
-            player.averagePosition = (oldTotal + stats.position) / Double(stats.gamesPlayed)
-        }
+        // This method is now deprecated - we use player.updateStatistics() directly
+        // Left for reference
     }
 } 

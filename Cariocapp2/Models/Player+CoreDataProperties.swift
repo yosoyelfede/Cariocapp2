@@ -134,75 +134,70 @@ extension Player {
     
     // MARK: - Statistics Management
     public func updateStatistics() {
-        // Reset statistics before recalculating
+        print("🔄 Starting statistics update for player \(name)")
+        
+        // IMPORTANT: Reset all statistics to zero
         gamesPlayed = 0
         gamesWon = 0
         totalScore = 0
         averagePosition = 0
         
-        // Get all completed games with unique IDs
-        let completedGames = self.completedGames
+        // Get all completed games
+        let allCompletedGames = self.completedGames
+        print("🔄 Found \(allCompletedGames.count) completed games for player \(name)")
         
-        // Create a dictionary to ensure uniqueness by game ID
-        var uniqueGames: [UUID: Game] = [:]
-        for game in completedGames {
-            uniqueGames[game.id] = game
-        }
+        // Track processed games to avoid duplicates
+        var processedGameIDs = Set<UUID>()
+        var totalPositions = 0
+        var totalGamesWithPositions = 0
         
-        print("🔢 Updating statistics for player \(name) - \(uniqueGames.count) unique completed games")
-        
-        // No games played? Just return
-        if uniqueGames.isEmpty {
-            print("🔢 No completed games for player \(name)")
-            return
-        }
-        
-        // Update games played
-        gamesPlayed = Int32(uniqueGames.count)
-        
-        // Calculate statistics
-        var wonGames = 0
-        var totalPosition = 0
-        var totalGameScore: Int32 = 0
-        
-        for (_, game) in uniqueGames {
-            // Only process games that have player snapshots
-            guard !game.playerSnapshotsArray.isEmpty else {
-                print("🔢 Game \(game.id) has no player snapshots, skipping")
+        // Process each completed game
+        for game in allCompletedGames {
+            // Skip if we've already processed this game
+            if processedGameIDs.contains(game.id) {
+                print("🔄 Skipping already processed game \(game.id)")
                 continue
             }
             
-            // Find this player's snapshot
-            if let playerSnapshot = game.playerSnapshotsArray.first(where: { $0.id == self.id }) {
-                // Check if player won (position 1)
-                if playerSnapshot.position == 1 {
-                    wonGames += 1
-                    print("🔢 Player \(name) won game \(game.id)")
+            // Skip games without snapshots
+            if game.playerSnapshotsArray.isEmpty {
+                print("🔄 Skipping game \(game.id) - no player snapshots")
+                continue
+            }
+            
+            // Find this player's snapshot in the game
+            if let snapshot = game.playerSnapshotsArray.first(where: { $0.id == self.id }) {
+                // Increment games played
+                gamesPlayed += 1
+                
+                // Check if player won
+                if snapshot.position == 1 {
+                    gamesWon += 1
+                    print("🔄 Player \(name) won game \(game.id)")
                 }
                 
-                // Add position and score
-                totalPosition += playerSnapshot.position
-                totalGameScore += Int32(playerSnapshot.score)
-                print("🔢 Player \(name) position: \(playerSnapshot.position), score: \(playerSnapshot.score) in game \(game.id)")
+                // Add to total score
+                totalScore += Int32(snapshot.score)
+                
+                // Track position for average calculation
+                totalPositions += snapshot.position
+                totalGamesWithPositions += 1
+                
+                print("🔄 Processed game \(game.id) - position: \(snapshot.position), score: \(snapshot.score)")
             } else {
-                print("🔢 Warning: Player \(name) has no snapshot in game \(game.id)")
+                print("🔄 Skipping game \(game.id) - player has no snapshot")
             }
+            
+            // Mark this game as processed
+            processedGameIDs.insert(game.id)
         }
         
-        // Update games won
-        gamesWon = Int32(wonGames)
-        
-        // Update average position
-        if uniqueGames.count > 0 {
-            averagePosition = Double(totalPosition) / Double(uniqueGames.count)
-        } else {
-            averagePosition = 0
+        // Calculate average position
+        if totalGamesWithPositions > 0 {
+            averagePosition = Double(totalPositions) / Double(totalGamesWithPositions)
         }
         
-        // Update total score
-        totalScore = totalGameScore
-        
-        print("🔢 Statistics updated for \(name): played=\(gamesPlayed), won=\(gamesWon), avg pos=\(averagePosition), score=\(totalScore)")
+        print("🔄 Statistics updated for \(name): played=\(gamesPlayed), won=\(gamesWon), avg pos=\(averagePosition), score=\(totalScore)")
     }
     
     // MARK: - Game Management
