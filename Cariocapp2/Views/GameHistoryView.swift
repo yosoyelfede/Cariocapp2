@@ -14,6 +14,7 @@ struct GameHistoryView: View {
     @State private var gameToDelete: Game?
     @State private var showingDetailView = false
     @State private var dataIsPreloaded = false
+    @State private var preloadedViewModel: GameDetailViewModel?
     
     // Grid layout properties
     private let columns = [
@@ -32,7 +33,8 @@ struct GameHistoryView: View {
             preloadGameDataAsync: preloadGameDataAsync,
             loadCompletedGames: loadCompletedGames,
             gameToDelete: $gameToDelete,
-            isDeleteConfirmationPresented: $isDeleteConfirmationPresented
+            isDeleteConfirmationPresented: $isDeleteConfirmationPresented,
+            preloadedViewModel: $preloadedViewModel
         )
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -66,10 +68,11 @@ struct GameHistoryView: View {
             Logger.logUIEvent("Detail view dismissed, resetting state")
             selectedGame = nil
             dataIsPreloaded = false
+            preloadedViewModel = nil
         }) {
-            if let selectedGame = selectedGame {
+            if let selectedGame = selectedGame, let viewModel = preloadedViewModel {
                 NavigationStack {
-                    GameDetailView(game: selectedGame, dataIsPreloaded: dataIsPreloaded)
+                    GameDetailView(game: selectedGame, dataIsPreloaded: dataIsPreloaded, preloadedViewModel: viewModel)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button {
@@ -103,6 +106,7 @@ struct GameHistoryView: View {
         var loadCompletedGames: () async -> Void
         var gameToDelete: Binding<Game?>
         var isDeleteConfirmationPresented: Binding<Bool>
+        @Binding var preloadedViewModel: GameDetailViewModel?
         
         var body: some View {
             ZStack {
@@ -128,7 +132,8 @@ struct GameHistoryView: View {
                             preloadGameDataAsync: preloadGameDataAsync,
                             loadCompletedGames: loadCompletedGames,
                             gameToDelete: gameToDelete,
-                            isDeleteConfirmationPresented: isDeleteConfirmationPresented
+                            isDeleteConfirmationPresented: isDeleteConfirmationPresented,
+                            preloadedViewModel: $preloadedViewModel
                         )
                     }
                 }
@@ -154,6 +159,7 @@ struct GameHistoryView: View {
         var loadCompletedGames: () async -> Void
         var gameToDelete: Binding<Game?>
         var isDeleteConfirmationPresented: Binding<Bool>
+        @Binding var preloadedViewModel: GameDetailViewModel?
         
         private let columns: [GridItem] = [
             GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
@@ -170,8 +176,13 @@ struct GameHistoryView: View {
                         ForEach(completedGames) { game in
                             GameHistoryCard(game: game)
                                 .onTapGesture {
-                                    // Prepare the game data synchronously before showing the detail view
-                                    prepareGameDataSynchronously(game)
+                                    Logger.logUIEvent("Game card tapped: \(game.id.uuidString)")
+                                    
+                                    // Create a fully preloaded view model before showing the detail view
+                                    let fullyLoadedViewModel = createFullyLoadedViewModel(for: game)
+                                    preloadedViewModel = fullyLoadedViewModel
+                                    
+                                    // Set the selected game and show the detail view
                                     selectedGame = game
                                     dataIsPreloaded = true
                                     showingDetailView = true
@@ -195,9 +206,9 @@ struct GameHistoryView: View {
             }
         }
         
-        // Synchronously prepare game data before showing detail view
-        private func prepareGameDataSynchronously(_ game: Game) {
-            Logger.logUIEvent("Preparing game data synchronously for game: \(game.id.uuidString)")
+        // Create a fully loaded view model with all data eagerly loaded
+        private func createFullyLoadedViewModel(for game: Game) -> GameDetailViewModel {
+            Logger.logUIEvent("Creating fully loaded view model for game: \(game.id.uuidString)")
             
             // Force immediate loading of all relationships
             _ = game.roundsArray
@@ -225,7 +236,10 @@ struct GameHistoryView: View {
             // Force loading of card color stats
             _ = game.cardColorStats
             
-            Logger.logUIEvent("Game data prepared synchronously for game: \(game.id.uuidString)")
+            // Create and return the view model
+            let viewModel = GameDetailViewModel(game: game)
+            Logger.logUIEvent("Fully loaded view model created for game: \(game.id.uuidString)")
+            return viewModel
         }
     }
     
@@ -397,16 +411,15 @@ private struct GameHistoryCard: View {
 private struct GameDetailView: View {
     let game: Game
     let dataIsPreloaded: Bool
+    let preloadedViewModel: GameDetailViewModel
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var viewModel: GameDetailViewModel
     @State private var isDataLoaded = false
     
-    init(game: Game, dataIsPreloaded: Bool) {
+    init(game: Game, dataIsPreloaded: Bool, preloadedViewModel: GameDetailViewModel) {
         self.game = game
         self.dataIsPreloaded = dataIsPreloaded
-        // Initialize the view model with the game data
-        _viewModel = State(initialValue: GameDetailViewModel(game: game))
-        Logger.logUIEvent("GameDetailView initialized for game: \(game.id.uuidString)")
+        self.preloadedViewModel = preloadedViewModel
+        Logger.logUIEvent("GameDetailView initialized with preloaded view model for game: \(game.id.uuidString)")
     }
     
     var body: some View {
@@ -429,46 +442,12 @@ private struct GameDetailView: View {
         .background(Color(.systemGroupedBackground))
         .onAppear {
             Logger.logUIEvent("GameDetailView appeared for game: \(game.id.uuidString)")
-            // Force synchronous data loading to ensure all data is available
-            forceSynchronousDataLoading()
-            // Ensure the view model has loaded all data
-            viewModel.loadAllData()
+            
+            // No need to force synchronous data loading since we're using a preloaded view model
+            // Just mark the data as loaded
             isDataLoaded = true
-            Logger.logUIEvent("GameDetailView data loaded for game: \(game.id.uuidString)")
+            Logger.logUIEvent("GameDetailView using preloaded data for game: \(game.id.uuidString)")
         }
-    }
-    
-    // Force synchronous loading of all data
-    private func forceSynchronousDataLoading() {
-        Logger.logUIEvent("Forcing synchronous data loading for game: \(game.id.uuidString)")
-        
-        // Access all critical properties to force Core Data to load them
-        _ = game.endDate
-        _ = game.playersArray.map { $0.name }
-        
-        // Access player snapshots
-        let snapshots = game.playerSnapshotsArray
-        for snapshot in snapshots {
-            _ = snapshot.name
-            _ = snapshot.position
-            _ = snapshot.score
-        }
-        
-        // Access rounds and scores
-        for round in game.roundsArray {
-            _ = round.name
-            _ = round.firstCardColor
-            let scores = round.sortedScores
-            for score in scores {
-                _ = score.player.name
-                _ = score.score
-            }
-        }
-        
-        // Access card color stats
-        _ = game.cardColorStats
-        
-        Logger.logUIEvent("Synchronous data loading completed for game: \(game.id.uuidString)")
     }
     
     // MARK: - Summary Card
@@ -487,7 +466,7 @@ private struct GameDetailView: View {
                 
                 Spacer()
                 
-                Text(viewModel.formattedEndDate)
+                Text(preloadedViewModel.formattedEndDate)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -506,7 +485,7 @@ private struct GameDetailView: View {
                             .foregroundColor(.blue)
                     }
                     
-                    Text(viewModel.playerNames)
+                    Text(preloadedViewModel.playerNames)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -524,7 +503,7 @@ private struct GameDetailView: View {
                             .foregroundColor(.blue)
                     }
                     
-                    Text("\(viewModel.completedRoundsCount)")
+                    Text("\(preloadedViewModel.completedRoundsCount)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -543,7 +522,7 @@ private struct GameDetailView: View {
                                 .foregroundColor(.red)
                         }
                         
-                        Text(viewModel.redPercentage)
+                        Text(preloadedViewModel.redPercentage)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -558,7 +537,7 @@ private struct GameDetailView: View {
                                 .foregroundColor(.black)
                         }
                         
-                        Text(viewModel.blackPercentage)
+                        Text(preloadedViewModel.blackPercentage)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -591,7 +570,7 @@ private struct GameDetailView: View {
                 GridItem(.flexible(), spacing: 8),
                 GridItem(.flexible(), spacing: 8)
             ], spacing: 8) {
-                ForEach(viewModel.playerSnapshots) { snapshot in
+                ForEach(preloadedViewModel.playerSnapshots) { snapshot in
                     HStack(spacing: 4) {
                         // Position
                         ZStack {
@@ -647,7 +626,7 @@ private struct GameDetailView: View {
                 GridItem(.flexible(), spacing: 8),
                 GridItem(.flexible(), spacing: 8)
             ], spacing: 8) {
-                ForEach(viewModel.playedRounds) { roundData in
+                ForEach(preloadedViewModel.playedRounds) { roundData in
                     CompactRoundDetailView(roundData: roundData)
                 }
             }
