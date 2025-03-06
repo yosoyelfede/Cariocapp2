@@ -7,15 +7,17 @@ struct ScoreEditView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var navigationCoordinator: NavigationCoordinator
+    @Environment(\.gameCoordinator) private var coordinator
     @StateObject private var viewModel: GameViewModel
     
     // MARK: - Properties
     let gameID: UUID
+    let roundID: UUID
     
-    init(gameID: UUID) {
+    init(gameID: UUID, roundID: UUID) {
         self.gameID = gameID
-        let coordinator = GameCoordinator(viewContext: PersistenceController.shared.container.viewContext)
-        self._viewModel = StateObject(wrappedValue: GameViewModel.instance(for: gameID, coordinator: coordinator))
+        self.roundID = roundID
+        self._viewModel = StateObject(wrappedValue: GameViewModel.instance(for: gameID, coordinator: GameCoordinator(viewContext: PersistenceController.shared.container.viewContext)))
     }
     
     // MARK: - State
@@ -23,6 +25,8 @@ struct ScoreEditView: View {
     @State private var errorMessage = ""
     @State private var selectedRound: Round?
     @State private var editedScores: [String: Int32] = [:]
+    @State private var isLoading = false
+    @State private var rounds: [Round] = []
     
     // MARK: - Computed Properties
     private var game: Game? {
@@ -32,71 +36,56 @@ struct ScoreEditView: View {
         return try? viewContext.fetch(request).first
     }
     
-    private var completedRounds: [Round] {
-        game?.roundsArray.filter { $0.isCompleted && !$0.isSkipped } ?? []
-    }
-    
-    private var selectedRoundScores: [(player: Player, score: Int32)] {
-        guard let round = selectedRound,
-              let game = game else { return [] }
-        
-        return game.playersArray.map { player in
-            let scoreKey = player.id.uuidString
-            let score = editedScores[scoreKey] ?? round.scores?[scoreKey] ?? 0
-            return (player: player, score: score)
-        }.sorted { $0.score < $1.score }
-    }
-    
     // MARK: - View Body
     var body: some View {
         NavigationStack {
-            List {
-                if completedRounds.isEmpty {
-                    ContentUnavailableView(
-                        "No Completed Rounds",
-                        systemImage: "number.circle",
-                        description: Text("Complete some rounds to edit their scores")
-                    )
-                } else {
-                    Section("Select Round") {
-                        ForEach(completedRounds) { round in
-                            Button {
-                                selectedRound = round
-                                editedScores.removeAll()
-                            } label: {
-                                HStack {
-                                    Text(round.name)
-                                    Spacer()
-                                    if selectedRound?.id == round.id {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(.blue)
+            ZStack {
+                List {
+                    if rounds.isEmpty {
+                        ContentUnavailableView(
+                            "No Rounds",
+                            systemImage: "number.circle",
+                            description: Text("No rounds available to edit")
+                        )
+                    } else {
+                        Section("Rounds") {
+                            ForEach(rounds.sorted(by: { $0.number < $1.number })) { round in
+                                RoundScoreEditRow(
+                                    round: round,
+                                    isSelected: selectedRound?.id == round.id,
+                                    editedScores: $editedScores,
+                                    onSelect: {
+                                        if selectedRound?.id == round.id {
+                                            // Deselect if already selected
+                                            selectedRound = nil
+                                        } else {
+                                            // Select this round
+                                            selectedRound = round
+                                            // Load scores for this round
+                                            loadScoresForRound(round)
+                                        }
                                     }
-                                }
+                                )
                             }
-                            .foregroundStyle(.primary)
+                        }
+                        
+                        if selectedRound != nil && !editedScores.isEmpty {
+                            Section {
+                                Button("Save Changes") {
+                                    saveScores()
+                                }
+                                .frame(maxWidth: .infinity)
+                                .disabled(editedScores.isEmpty)
+                            }
                         }
                     }
-                    
-                    if let round = selectedRound {
-                        Section("Edit Scores") {
-                            ForEach(selectedRoundScores, id: \.player.id) { score in
-                                HStack {
-                                    Text(score.player.name)
-                                    Spacer()
-                                    TextField("Score", value: binding(for: score.player), format: .number)
-                                        .keyboardType(.numberPad)
-                                        .multilineTextAlignment(.trailing)
-                                        .frame(width: 80)
-                                }
-                            }
-                            
-                            Button("Save Changes") {
-                                saveScores()
-                            }
-                            .frame(maxWidth: .infinity)
-                            .disabled(editedScores.isEmpty)
-                        }
-                    }
+                }
+                
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black.opacity(0.1))
                 }
             }
             .navigationTitle("Edit Scores")
@@ -113,14 +102,156 @@ struct ScoreEditView: View {
             } message: {
                 Text(errorMessage)
             }
+            .task {
+                await loadGame()
+            }
         }
     }
     
     // MARK: - Helper Methods
+    private func loadGame() async {
+        isLoading = true
+        
+        do {
+            // Get the game from the view context
+            let request = Game.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", gameID as CVarArg)
+            request.fetchLimit = 1
+            
+            if let game = try viewContext.fetch(request).first {
+                // Get all completed rounds
+                rounds = game.roundsArray.filter { $0.isCompleted && !$0.isSkipped }
+                
+                // If roundID is specified, select that round
+                if let specificRound = rounds.first(where: { $0.id == roundID }) {
+                    selectedRound = specificRound
+                    loadScoresForRound(specificRound)
+                }
+            } else {
+                errorMessage = "Game not found"
+                showingError = true
+            }
+        } catch {
+            errorMessage = "Error loading game: \(error.localizedDescription)"
+            showingError = true
+        }
+        
+        isLoading = false
+    }
+    
+    private func loadScoresForRound(_ round: Round) {
+        if let scores = round.scores {
+            editedScores = scores
+        } else {
+            editedScores = [:]
+        }
+    }
+    
+    private func saveScores() {
+        guard let selectedRound = selectedRound else { return }
+        
+        isLoading = true
+        
+        Task {
+            do {
+                print("🔄 Saving edited scores for round \(selectedRound.id)")
+                print("🔄 Edited scores: \(editedScores)")
+                
+                // Update the round scores
+                let updatedRound = try await coordinator.updateRoundScores(roundID: selectedRound.id, scores: editedScores)
+                if updatedRound != nil {
+                    print("✅ Round scores updated successfully")
+                    
+                    // Force refresh the game state to ensure changes are reflected
+                    try await viewModel.refreshGameState()
+                    
+                    // Force refresh the context
+                    viewContext.refreshAllObjects()
+                    
+                    // Notify the game view to update
+                    try await navigationCoordinator.refreshGameState(gameID)
+                    
+                    // Add a small delay to ensure UI updates
+                    try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                    
+                    // Successfully updated
+                    dismiss()
+                } else {
+                    errorMessage = "Failed to update scores"
+                    showingError = true
+                }
+            } catch {
+                print("❌ Error updating scores: \(error)")
+                errorMessage = "Error updating scores: \(error.localizedDescription)"
+                showingError = true
+            }
+            
+            isLoading = false
+        }
+    }
+}
+
+// MARK: - Round Score Edit Row
+struct RoundScoreEditRow: View {
+    let round: Round
+    let isSelected: Bool
+    @Binding var editedScores: [String: Int32]
+    let onSelect: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Round header (always visible)
+            Button(action: onSelect) {
+                HStack {
+                    Text("Round \(round.number)")
+                        .font(.headline)
+                    
+                    if let firstCardColor = round.firstCardColor {
+                        Text("(\(firstCardColor))")
+                            .font(.subheadline)
+                            .foregroundColor(firstCardColor == "red" ? .red : .primary)
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(isSelected ? .blue : .gray)
+                }
+                .contentShape(Rectangle())
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            
+            // Player scores (only visible when selected)
+            if isSelected {
+                Divider()
+                
+                ForEach(round.game?.playersArray ?? [], id: \.id) { player in
+                    HStack {
+                        Text(player.name)
+                            .font(.subheadline)
+                        
+                        Spacer()
+                        
+                        TextField("Score", value: binding(for: player), format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 80)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .background(isSelected ? Color(.secondarySystemBackground) : Color.clear)
+        .cornerRadius(8)
+    }
+    
     private func binding(for player: Player) -> Binding<Int32> {
         let key = player.id.uuidString
         return Binding(
-            get: { editedScores[key] ?? selectedRound?.scores?[key] ?? 0 },
+            get: { editedScores[key] ?? round.scores?[key] ?? 0 },
             set: { newValue in
                 if newValue >= 0 {
                     editedScores[key] = newValue
@@ -128,44 +259,13 @@ struct ScoreEditView: View {
             }
         )
     }
-    
-    private func saveScores() {
-        guard let round = selectedRound,
-              !editedScores.isEmpty else { return }
-        
-        do {
-            // Update scores
-            var updatedScores = round.scores ?? [:]
-            for (playerId, score) in editedScores {
-                updatedScores[playerId] = score
-            }
-            round.scores = updatedScores
-            
-            // Save changes
-            try viewContext.save()
-            
-            // Refresh game state
-            if let game = game {
-                Task {
-                    try await viewModel.refreshGameState()
-                }
-            }
-            
-            // Clear state and dismiss
-            editedScores.removeAll()
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-            showingError = true
-        }
-    }
 }
 
 // MARK: - Preview
 struct ScoreEditView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationStack {
-            ScoreEditView(gameID: UUID())
+            ScoreEditView(gameID: UUID(), roundID: UUID())
                 .environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
         }
     }

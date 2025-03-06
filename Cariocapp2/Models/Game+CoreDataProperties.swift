@@ -246,9 +246,9 @@ extension Game {
             playerScores[player.id.uuidString] = totalScore
         }
         
-        // Sort players by score (highest first)
+        // Sort players by score (lowest first for this game - lower is better)
         let sortedPlayers = playersArray.sorted { 
-            (playerScores[$0.id.uuidString] ?? 0) > (playerScores[$1.id.uuidString] ?? 0)
+            (playerScores[$0.id.uuidString] ?? 0) < (playerScores[$1.id.uuidString] ?? 0)
         }
         
         // Create snapshots with positions

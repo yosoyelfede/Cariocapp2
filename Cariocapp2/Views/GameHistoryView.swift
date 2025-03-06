@@ -8,6 +8,8 @@ struct GameHistoryView: View {
     @State private var completedGames: [Game] = []
     @State private var selectedGame: Game?
     @State private var isLoading = true
+    @State private var gameToDelete: Game?
+    @State private var showingDeleteConfirmation = false
     
     var body: some View {
         NavigationSplitView {
@@ -16,6 +18,18 @@ struct GameHistoryView: View {
                 List(completedGames, selection: $selectedGame) { game in
                     GameHistoryListRow(game: game)
                         .tag(game)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                gameToDelete = game
+                                showingDeleteConfirmation = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                        .onLongPressGesture {
+                            gameToDelete = game
+                            showingDeleteConfirmation = true
+                        }
                 }
                 .listStyle(SidebarListStyle())
                 .overlay {
@@ -38,6 +52,18 @@ struct GameHistoryView: View {
                 await loadCompletedGames()
             }
             .frame(minWidth: 250, idealWidth: 300, maxWidth: 350)
+            .alert("Delete Game", isPresented: $showingDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    gameToDelete = nil
+                }
+                Button("Delete", role: .destructive) {
+                    if let game = gameToDelete {
+                        deleteGame(game)
+                    }
+                }
+            } message: {
+                Text("Are you sure you want to delete this game? This action cannot be undone.")
+            }
         } detail: {
             // Detail View
             if let game = selectedGame {
@@ -174,6 +200,33 @@ struct GameHistoryView: View {
                 print("🔧 Saved updated player statistics")
             } catch {
                 print("❌ Error saving player statistics: \(error)")
+            }
+        }
+    }
+    
+    // Add a method to delete games
+    private func deleteGame(_ game: Game) {
+        Task {
+            do {
+                print("🗑️ Deleting game: \(game.id)")
+                
+                // If this is the selected game, deselect it
+                if selectedGame?.id == game.id {
+                    selectedGame = nil
+                }
+                
+                // Delete the game
+                viewContext.delete(game)
+                
+                // Save changes
+                try viewContext.save()
+                
+                // Refresh the list
+                await loadCompletedGames()
+                
+                print("🗑️ Game deleted successfully")
+            } catch {
+                print("❌ Error deleting game: \(error)")
             }
         }
     }

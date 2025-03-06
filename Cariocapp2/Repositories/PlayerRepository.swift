@@ -39,7 +39,9 @@ class CoreDataPlayerRepository: PlayerRepository, ObservableObject {
         print("🗄️ Creating player: \(trimmedName)")
         
         let player = Player(context: context)
-        player.id = UUID()
+        // Create a new UUID to avoid bridging issues
+        let playerID = UUID()
+        player.id = playerID
         player.name = trimmedName
         player.gamesPlayed = 0
         player.gamesWon = 0
@@ -51,13 +53,15 @@ class CoreDataPlayerRepository: PlayerRepository, ObservableObject {
         try player.validate()
         try context.save()
         
-        print("🗄️ Player created: \(player.name) with ID: \(player.id), isGuest: \(player.isGuest)")
+        print("🗄️ Player created: \(player.name) with ID: \(playerID.uuidString), isGuest: \(player.isGuest)")
         return player
     }
     
     func fetchPlayers(includeGuests: Bool = false) throws -> [Player] {
-        print("🗄️ Cleaning up abandoned games...")
-        try cleanupAbandonedGames()
+        print("🗄️ Fetching players (includeGuests: \(includeGuests))")
+        
+        // Only clean up abandoned games when explicitly requested
+        // This prevents unnecessary updates during regular fetches
         
         let request = NSFetchRequest<Player>(entityName: "Player")
         
@@ -88,7 +92,7 @@ class CoreDataPlayerRepository: PlayerRepository, ObservableObject {
         return validPlayers
     }
     
-    private func cleanupAbandonedGames() throws {
+    func cleanupAbandonedGames() throws {
         print("🗄️ Starting abandoned games cleanup")
         let request = NSFetchRequest<Game>(entityName: "Game")
         request.predicate = NSPredicate(format: "isActive == true AND rounds.@count == 1")
@@ -136,19 +140,7 @@ class CoreDataPlayerRepository: PlayerRepository, ObservableObject {
             throw AppError.invalidPlayerState("Cannot delete player with active games")
         }
         
-        // Clean up relationships
-        player.cleanup()
-        
-        // Delete the player
-        context.delete(player)
-        
-        // Force a save to ensure deletion is persisted
-        try context.save()
-        
-        // Refresh the context to ensure deletion is reflected
-        context.refreshAllObjects()
-        
-        // Additional cleanup: Remove player from any games they were part of
+        // Remove player from any games they were part of first
         let gameRequest = NSFetchRequest<Game>(entityName: "Game")
         if let games = try? context.fetch(gameRequest) {
             for game in games {
@@ -158,9 +150,16 @@ class CoreDataPlayerRepository: PlayerRepository, ObservableObject {
                     game.players = updatedPlayers as NSSet
                 }
             }
-            // Save changes after cleanup
-            try context.save()
         }
+        
+        // Delete the player
+        context.delete(player)
+        
+        // Force a save to ensure deletion is persisted
+        try context.save()
+        
+        // Refresh the context to ensure deletion is reflected
+        context.refreshAllObjects()
         
         print("🗄️ Player deleted successfully")
     }

@@ -35,11 +35,7 @@ struct PlayerManagementView: View {
                         .onLongPressGesture {
                             selectedPlayer = player
                             playerName = player.name
-                            if player.activeGames.isEmpty {
-                                showingDeleteConfirmation = true
-                            } else {
-                                showingEditPlayer = true
-                            }
+                            showingEditPlayer = true
                         }
                         .contextMenu {
                             Button {
@@ -149,19 +145,26 @@ struct PlayerManagementView: View {
             // Update repository context with environment context
             repository.updateContext(viewContext)
             
-            // Force a refresh of the context to ensure we have the latest data
-            viewContext.refreshAllObjects()
-            refreshPlayers()
+            // Only refresh players if the array is empty
+            if players.isEmpty {
+                refreshPlayers(forceCleanup: true)
+            }
         }
         .onChange(of: repository.context.hasChanges) { _, hasChanges in
             if hasChanges {
-                refreshPlayers()
+                // Only refresh the list, don't trigger statistics updates
+                refreshPlayers(forceCleanup: false)
             }
         }
     }
     
-    private func refreshPlayers() {
+    private func refreshPlayers(forceCleanup: Bool = false) {
         do {
+            // If cleanup is requested, perform it before fetching players
+            if forceCleanup {
+                try repository.cleanupAbandonedGames()
+            }
+            
             // Use repository's fetchPlayers method to get only non-guest players
             let players = try repository.fetchPlayers(includeGuests: false)
             
@@ -171,7 +174,7 @@ struct PlayerManagementView: View {
             }
             
             // Update the players array
-            self.players = players
+            self.players = players.filter { !$0.isDeleted && $0.managedObjectContext != nil }
             
             print("🔍 Players refreshed")
         } catch {
@@ -254,23 +257,93 @@ struct PlayerManagementView: View {
     
     private func deletePlayer(_ player: Player) {
         do {
-            print("🗑️ Deleting player: \(player.name)")
-            try repository.deletePlayer(player)
+            print("🗑️ Starting deletion of player: \(player.name)")
             
-            // Save context after deleting player
-            try repository.context.save()
+            // Get all games associated with this player
+            let games = player.gamesArray
+            print("🗑️ Player has \(games.count) total games")
             
-            // Refresh the players list
+            // Debug active games
+            let activeGames = player.activeGames
+            print("🗑️ Player has \(activeGames.count) active games")
+            for game in activeGames {
+                print("🗑️ Active game: \(game.id), isActive: \(game.isActive), isComplete: \(game.isComplete)")
+            }
+            
+            // Force refresh the context to ensure we have the latest data
+            viewContext.refreshAllObjects()
+            
+            // First, fix any games that are complete but still marked as active
+            for game in games where game.isActive {
+                if game.isComplete {
+                    print("🗑️ Found completed game marked as active: \(game.id)")
+                    game.isActive = false
+                    game.endDate = Date()
+                    try viewContext.save()
+                }
+            }
+            
+            // Refresh player data after fixing games
+            viewContext.refreshAllObjects()
+            
+            // Verify no active games first
+            guard player.activeGames.isEmpty else {
+                // Try to fix any games that might be incorrectly marked as active
+                print("🗑️ Attempting to fix active games")
+                for game in player.activeGames {
+                    if game.isComplete {
+                        print("🗑️ Found completed game marked as active: \(game.id)")
+                        game.isActive = false
+                        game.endDate = Date()
+                        try viewContext.save()
+                    }
+                }
+                
+                // Check again after fixing
+                if !player.activeGames.isEmpty {
+                    throw AppError.invalidPlayerState("Cannot delete player with active games")
+                }
+                return
+            }
+            
+            // First delete all completed games
+            print("🗑️ Deleting \(games.count) associated games")
+            for game in games where !game.isActive {
+                print("🗑️ Deleting game: \(game.id)")
+                // Delete the game first, which will handle its own cleanup
+                viewContext.delete(game)
+            }
+            
+            // Save after game deletions
+            try viewContext.save()
+            
+            // Now break player relationships
+            print("🗑️ Breaking relationships for player: \(player.name)")
+            player.games = NSSet()
+            try viewContext.save()
+            
+            // Finally delete the player
+            print("🗑️ Deleting player object")
+            viewContext.delete(player)
+            
+            // Clear selection
+            selectedPlayer = nil
+            
+            // Final save
+            try viewContext.save()
+            print("🗑️ Player deletion completed successfully")
+            
+            // Refresh the view
+            viewContext.refreshAllObjects()
             refreshPlayers()
             
-            selectedPlayer = nil
         } catch let error as AppError {
             print("❌ Failed to delete player: \(error.localizedDescription)")
             errorMessage = error.localizedDescription
             showingError = true
         } catch {
-            print("❌ Unexpected error deleting player: \(error.localizedDescription)")
-            errorMessage = "An unexpected error occurred"
+            print("❌ Unexpected error deleting player: \(error)")
+            errorMessage = "An unexpected error occurred while deleting the player"
             showingError = true
         }
     }
