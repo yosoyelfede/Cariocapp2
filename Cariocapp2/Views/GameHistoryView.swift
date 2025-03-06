@@ -170,26 +170,13 @@ struct GameHistoryView: View {
                         ForEach(completedGames) { game in
                             GameHistoryCard(game: game)
                                 .onTapGesture {
-                                    Logger.logUIEvent("Game card tapped: \(game.id.uuidString)")
+                                    // Prepare the game data synchronously before showing the detail view
+                                    prepareGameDataSynchronously(game)
+                                    
+                                    // Set the selected game and show the detail view
                                     selectedGame = game
-                                    
-                                    // Always start with dataIsPreloaded = false
-                                    dataIsPreloaded = false
-                                    
-                                    // Show the detail view immediately
+                                    dataIsPreloaded = true
                                     showingDetailView = true
-                                    
-                                    // Preload data asynchronously
-                                    Task {
-                                        // Start preloading immediately
-                                        await preloadGameDataAsync(game)
-                                        
-                                        // Mark as preloaded when done
-                                        await MainActor.run {
-                                            dataIsPreloaded = true
-                                            Logger.logUIEvent("Data preloading completed for game: \(game.id.uuidString)")
-                                        }
-                                    }
                                 }
                                 .contextMenu {
                                     Button(role: .destructive) {
@@ -207,6 +194,23 @@ struct GameHistoryView: View {
             }
             .refreshable {
                 await loadCompletedGames()
+            }
+        }
+        
+        // Prepare game data synchronously before showing the detail view
+        private func prepareGameDataSynchronously(_ game: Game) {
+            // Force immediate loading of critical data
+            _ = game.playersArray
+            _ = game.roundsArray
+            
+            // Force loading of player snapshots
+            _ = game.playerSnapshotsArray
+            
+            // Force loading of rounds and scores
+            for round in game.roundsArray {
+                _ = round.name
+                _ = round.firstCardColor
+                _ = round.scores
             }
         }
     }
@@ -298,57 +302,21 @@ struct GameHistoryView: View {
     
     // Preload game data asynchronously
     private func preloadGameDataAsync(_ game: Game) async {
-        Logger.logUIEvent("Starting async preload for game: \(game.id.uuidString)")
+        // Force immediate loading of all relationships
+        _ = game.roundsArray
+        _ = game.playersArray
         
-        // Perform on a background thread to avoid UI blocking
-        await Task.detached(priority: .userInitiated) {
-            // Force loading of all relationships
-            Logger.logUIEvent("Loading rounds array")
-            let rounds = game.roundsArray
-            Logger.logUIEvent("Loaded \(rounds.count) rounds")
-            
-            Logger.logUIEvent("Loading players array")
-            let players = game.playersArray
-            Logger.logUIEvent("Loaded \(players.count) players")
-            
-            // Access player snapshots to ensure they're loaded
-            Logger.logUIEvent("Loading player snapshots")
-            let snapshots = game.playerSnapshotsArray
-            Logger.logUIEvent("Loaded \(snapshots.count) player snapshots")
-            
-            // Ensure each snapshot's properties are accessed to force loading
-            for snapshot in snapshots {
-                let _ = snapshot.name
-                let _ = snapshot.position
-                let _ = snapshot.score
-            }
-            
-            // Access round scores to ensure they're loaded
-            Logger.logUIEvent("Loading round scores")
-            for round in rounds {
-                let _ = round.scores
-                let _ = round.firstCardColor
-                
-                // Force loading of player relationships in scores
-                if let scores = round.scores as? Set<NSManagedObject> {
-                    for case let score as NSManagedObject in scores {
-                        let _ = score.objectID
-                        
-                        // Access all properties of the score
-                        for property in score.entity.properties {
-                            let _ = score.value(forKey: property.name)
-                        }
-                    }
-                }
-            }
-            
-            // Force loading of card color stats
-            Logger.logUIEvent("Loading card color stats")
-            let colorStats = game.cardColorStats
-            Logger.logUIEvent("Card color stats - Red: \(colorStats.redPercentage)%, Black: \(colorStats.blackPercentage)%")
-            
-            Logger.logUIEvent("Preloading completed for game: \(game.id.uuidString)")
-        }.value
+        // Access player snapshots to ensure they're loaded
+        _ = game.playerSnapshotsArray
+        
+        // Access round scores to ensure they're loaded
+        for round in game.roundsArray {
+            _ = round.scores
+            _ = round.firstCardColor
+        }
+        
+        // Force loading of card color stats
+        _ = game.cardColorStats
     }
     
     private func updatePlayerStatistics(_ player: Player) async throws {
@@ -416,106 +384,45 @@ private struct GameDetailView: View {
     let game: Game
     let dataIsPreloaded: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var isDataLoaded = false
     
     var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Game summary card
-                    summaryCard
-                    
-                    // Final standings card
-                    standingsCard
-                    
-                    // Round details card
-                    roundDetailsCard
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-            }
-            
-            if !isDataLoaded {
-                Color(.systemBackground)
-                    .opacity(0.7)
-                    .ignoresSafeArea()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Game summary card
+                summaryCard
                 
-                ProgressView("Loading game details...")
+                // Final standings card
+                standingsCard
+                
+                // Round details card
+                roundDetailsCard
             }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
         }
         .navigationTitle("Game Details")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemGroupedBackground))
-        .task {
-            Logger.logUIEvent("GameDetailView appeared for game: \(game.id.uuidString), dataIsPreloaded: \(dataIsPreloaded)")
-            if dataIsPreloaded {
-                // If data is already preloaded, just mark as loaded
-                Logger.logUIEvent("Data was preloaded, marking as loaded")
-                isDataLoaded = true
-            } else {
-                // Otherwise load it now
-                Logger.logUIEvent("Data was not preloaded, loading now")
-                Task {
-                    await loadGameData()
-                }
-            }
+        .onAppear {
+            // Force immediate loading of critical data
+            forceSynchronousDataLoading()
         }
     }
     
-    // Load game data asynchronously
-    private func loadGameData() async {
-        Logger.logUIEvent("Starting to load game data for game: \(game.id.uuidString)")
+    // Force synchronous loading of critical data
+    private func forceSynchronousDataLoading() {
+        // Access key properties to force Core Data to load them
+        _ = game.playersArray
+        _ = game.roundsArray
         
-        // Perform on a background thread to avoid UI blocking
-        await Task.detached(priority: .userInitiated) {
-            // Force loading of all relationships if not already loaded
-            Logger.logUIEvent("Loading rounds array")
-            let rounds = game.roundsArray
-            Logger.logUIEvent("Loaded \(rounds.count) rounds")
-            
-            Logger.logUIEvent("Loading players array")
-            let players = game.playersArray
-            Logger.logUIEvent("Loaded \(players.count) players")
-            
-            Logger.logUIEvent("Loading player snapshots")
-            let snapshots = game.playerSnapshotsArray
-            Logger.logUIEvent("Loaded \(snapshots.count) player snapshots")
-            
-            // Ensure each snapshot's properties are accessed to force loading
-            for snapshot in snapshots {
-                let _ = snapshot.name
-                let _ = snapshot.position
-                let _ = snapshot.score
-            }
-            
-            Logger.logUIEvent("Loading card color stats")
-            let colorStats = game.cardColorStats
-            Logger.logUIEvent("Card color stats - Red: \(colorStats.redPercentage)%, Black: \(colorStats.blackPercentage)%")
-            
-            // Access round scores to ensure they're loaded
-            Logger.logUIEvent("Loading round scores")
-            for round in rounds {
-                let _ = round.scores
-                let _ = round.firstCardColor
-                
-                // Force loading of player relationships in scores
-                if let scores = round.scores as? Set<NSManagedObject> {
-                    for case let score as NSManagedObject in scores {
-                        let _ = score.objectID
-                        
-                        // Access all properties of the score
-                        for property in score.entity.properties {
-                            let _ = score.value(forKey: property.name)
-                        }
-                    }
-                }
-            }
-        }.value
+        // Force loading of player snapshots
+        _ = game.playerSnapshotsArray
         
-        // Mark data as loaded on the main thread
-        await MainActor.run {
-            Logger.logUIEvent("Data loading completed, updating UI")
-            isDataLoaded = true
+        // Force loading of rounds and scores
+        for round in game.roundsArray {
+            _ = round.name
+            _ = round.firstCardColor
+            _ = round.scores
         }
     }
     
