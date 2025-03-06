@@ -14,6 +14,16 @@ extension Game {
     @NSManaged public var isActive: Bool
     @NSManaged public var players: NSSet?
     @NSManaged public var rounds: NSSet?
+    @NSManaged public var playerSnapshots: NSArray?
+    
+    public var playerSnapshotsArray: [PlayerSnapshot] {
+        get {
+            return playerSnapshots?.map { $0 as! PlayerSnapshot } ?? []
+        }
+        set {
+            playerSnapshots = newValue as NSArray
+        }
+    }
     
     public override func awakeFromInsert() {
         super.awakeFromInsert()
@@ -22,19 +32,18 @@ extension Game {
         currentRound = 1
         dealerIndex = 0
         isActive = true
+        playerSnapshotsArray = []
     }
     
     // MARK: - Public Properties
     public var playersArray: [Player] {
-        guard let allObjects = players?.allObjects else { return [] }
+        let allObjects = players?.allObjects ?? []
         return (allObjects as? [Player])?.sorted { $0.name < $1.name } ?? []
     }
     
     public var roundsArray: [Round] {
-        guard let allObjects = rounds?.allObjects else { return [] }
-        let roundsArray = (allObjects as? [Round])?.sorted { $0.number < $1.number } ?? []
-        print("🎲 Game \(id) - Fetched \(roundsArray.count) rounds: \(roundsArray.map { "Round \($0.number)" }.joined(separator: ", "))")
-        return roundsArray
+        let allObjects = rounds?.allObjects ?? []
+        return (allObjects as? [Round])?.sorted { $0.number < $1.number } ?? []
     }
     
     public var dealer: Player? {
@@ -81,40 +90,43 @@ extension Game {
     }
     
     public var isComplete: Bool {
-        // Get all rounds and expected count
-        let allRounds = roundsArray
-        let expectedRoundCount = maxRounds
+        print("🎯 [isComplete] Round \(currentRound): checking completion")
         
-        // Game is complete if:
-        // 1. We have rounds
-        // 2. All non-skipped rounds are completed
-        // 3. Current round is greater than max rounds (we've gone through all rounds)
-        guard !allRounds.isEmpty,
-              allRounds.allSatisfy({ $0.isCompleted }),
-              currentRound > Int16(expectedRoundCount) else {
+        let allRounds = roundsArray
+        let round12 = allRounds.first(where: { $0.number == 12 })
+        
+        if let round12 = round12 {
+            print("🎯 [isComplete] Round 12: completed=\(round12.isCompleted)")
+            guard round12.isCompleted && !round12.isSkipped else {
+                return false
+            }
+        } else {
             return false
         }
         
         // Get all non-skipped rounds
         let nonSkippedRounds = allRounds.filter { !$0.isSkipped }
         
-        // Verify we have all required rounds (1-8 and 12)
-        let requiredRoundNumbers: Set<Int16> = [1, 2, 3, 4, 5, 6, 7, 8, 12]
-        let actualRoundNumbers = Set(nonSkippedRounds.map { $0.number })
+        // Verify required rounds (1-8)
+        let requiredRoundNumbers: Set<Int16> = [1, 2, 3, 4, 5, 6, 7, 8]
+        let completedRequiredRounds = nonSkippedRounds.filter { round in
+            requiredRoundNumbers.contains(round.number) && round.isCompleted
+        }
         
-        // Check if we have all required rounds
-        guard requiredRoundNumbers.isSubset(of: actualRoundNumbers) else {
+        guard completedRequiredRounds.count == requiredRoundNumbers.count else {
             return false
         }
         
-        // Check if optional rounds (9-11) are either skipped or completed
+        // Check optional rounds (9-11)
         let optionalRoundNumbers: Set<Int16> = [9, 10, 11]
         let optionalRounds = allRounds.filter { optionalRoundNumbers.contains($0.number) }
+        let allOptionalHandled = optionalRounds.allSatisfy({ $0.isSkipped || $0.isCompleted })
         
-        guard optionalRounds.allSatisfy({ $0.isSkipped || $0.isCompleted }) else {
+        guard allOptionalHandled else {
             return false
         }
         
+        print("🎯 [isComplete] Game is complete!")
         return true
     }
     
@@ -125,40 +137,57 @@ extension Game {
     
     // MARK: - Validation
     public func validate() throws {
-        // Validate basic properties
-        guard id != UUID.init() else { throw AppError.invalidGameState("Game ID is invalid") }
-        guard startDate <= Date() else { throw AppError.invalidGameState("Start date is in the future") }
-        guard currentRound > 0 && currentRound <= Int16(maxRounds) else {
-            throw AppError.invalidGameState("Invalid round number: \(currentRound)")
+        // Validate ID
+        guard id != UUID.init() else {
+            throw AppError.invalidGameState("Game ID is invalid")
         }
         
         // Validate players
-        let playerCount = playersArray.count
-        guard playerCount >= 2 && playerCount <= 4 else {
-            throw AppError.invalidGameState("Invalid number of players: \(playerCount)")
+        guard let players = players else {
+            throw AppError.invalidGameState("Game has no players")
         }
         
-        // Validate dealer index
-        guard dealerIndex >= 0 && dealerIndex < Int16(playerCount) else {
-            throw AppError.invalidGameState("Invalid dealer index: \(dealerIndex)")
+        guard players.count >= 2 && players.count <= 4 else {
+            throw AppError.invalidGameState("Game must have between 2 and 4 players")
         }
         
         // Validate rounds
-        let roundCount = roundsArray.count
-        guard roundCount <= maxRounds else {
-            throw AppError.invalidGameState("Too many rounds: \(roundCount)")
+        guard let rounds = rounds else {
+            throw AppError.invalidGameState("Game has no rounds")
+        }
+        
+        let roundsArray = rounds.allObjects as? [Round] ?? []
+        guard roundsArray.count <= 12 else {
+            throw AppError.invalidGameState("Game cannot have more than 12 rounds")
+        }
+        
+        // Validate round numbers
+        let roundNumbers = roundsArray.map { $0.number }
+        guard Set(roundNumbers).count == roundNumbers.count else {
+            throw AppError.invalidGameState("Duplicate round numbers found")
         }
         
         // Validate round sequence
-        let roundNumbers = Set(roundsArray.map { $0.number })
-        guard roundNumbers.count == roundCount else {
-            throw AppError.invalidGameState("Duplicate round numbers detected")
+        let sortedRoundNumbers = roundNumbers.sorted()
+        guard sortedRoundNumbers == Array((1...roundNumbers.count).map { Int16($0) }) else {
+            throw AppError.invalidGameState("Invalid round sequence")
         }
         
-        // Validate round completion
-        for round in roundsArray where round.number < currentRound {
-            guard round.isCompleted else {
-                throw AppError.invalidGameState("Incomplete round: \(round.number)")
+        // Validate start date
+        guard startDate <= Date() else {
+            throw AppError.invalidGameState("Start date cannot be in the future")
+        }
+        
+        // If game is not active, validate end date
+        if !isActive {
+            guard let endDate = endDate else {
+                throw AppError.invalidGameState("Inactive game must have an end date")
+            }
+            guard endDate >= startDate else {
+                throw AppError.invalidGameState("End date must be after start date")
+            }
+            guard endDate <= Date() else {
+                throw AppError.invalidGameState("End date cannot be in the future")
             }
         }
     }
@@ -189,6 +218,99 @@ extension Game {
         for player in playersArray {
             player.updateStatistics()
         }
+    }
+    
+    public func createSnapshot() {
+        print("📸 Creating game snapshot for game \(id)")
+        
+        // Create a dictionary to map player IDs to their total scores
+        var playerScores: [String: Int32] = [:]
+        
+        // Calculate total scores for each player
+        for player in playersArray {
+            var totalScore: Int32 = 0
+            
+            // Sum up scores from all rounds
+            for round in sortedRounds {
+                if let score = round.scores?[player.id.uuidString] {
+                    totalScore += score
+                }
+            }
+            
+            playerScores[player.id.uuidString] = totalScore
+        }
+        
+        // Sort players by score (highest first)
+        let sortedPlayers = playersArray.sorted { 
+            (playerScores[$0.id.uuidString] ?? 0) > (playerScores[$1.id.uuidString] ?? 0)
+        }
+        
+        // Create snapshots with positions
+        let snapshots = sortedPlayers.enumerated().map { index, player in
+            PlayerSnapshot(
+                id: player.id,
+                name: player.name,
+                score: Int(playerScores[player.id.uuidString] ?? 0),
+                position: index + 1
+            )
+        }
+        
+        print("📸 Created \(snapshots.count) player snapshots:")
+        for snapshot in snapshots {
+            print("📸 Player: \(snapshot.name), Position: \(snapshot.position), Score: \(snapshot.score)")
+        }
+        
+        self.playerSnapshotsArray = snapshots
+    }
+    
+    // MARK: - Game Management
+    public func addPlayer(_ player: Player) throws {
+        guard isActive else {
+            throw AppError.invalidGameState("Cannot add player to inactive game")
+        }
+        
+        guard !playersArray.contains(where: { $0.id == player.id }) else {
+            throw AppError.invalidGameState("Player is already in the game")
+        }
+        
+        guard player.canJoinGame() else {
+            throw AppError.invalidGameState("Player cannot join more games")
+        }
+        
+        var updatedPlayers = players as? Set<Player> ?? Set<Player>()
+        updatedPlayers.insert(player)
+        players = updatedPlayers as NSSet
+    }
+    
+    public func removePlayer(_ player: Player) throws {
+        guard isActive else {
+            throw AppError.invalidGameState("Cannot remove player from inactive game")
+        }
+        
+        guard playersArray.contains(where: { $0.id == player.id }) else {
+            throw AppError.invalidGameState("Player is not in the game")
+        }
+        
+        var updatedPlayers = players as? Set<Player> ?? Set<Player>()
+        updatedPlayers.remove(player)
+        players = updatedPlayers as NSSet
+    }
+    
+    public func canStart() -> Bool {
+        guard let players = players else { return false }
+        return players.count >= 2 && players.count <= 4
+    }
+    
+    public func takeSnapshot() {
+        let snapshots = playersArray.map { player in
+            PlayerSnapshot(
+                id: player.id,
+                name: player.name,
+                score: Int(player.totalScore),
+                position: 0
+            )
+        }
+        playerSnapshotsArray = snapshots
     }
 }
 

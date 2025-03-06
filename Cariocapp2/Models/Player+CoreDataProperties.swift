@@ -136,44 +136,61 @@ extension Player {
     public func updateStatistics() {
         guard let allGames = games?.allObjects as? [Game] else { return }
         
+        // Filter to only include completed games
+        let completedGames = allGames.filter { !$0.isActive && $0.endDate != nil }
+        print("🔢 Updating statistics for player \(name) - \(completedGames.count) completed games")
+        
         // Update games played
-        gamesPlayed = Int32(allGames.count)
+        gamesPlayed = Int32(completedGames.count)
         
         // Update games won
         var wonGames = 0
-        for game in allGames {
-            if let lastRound = game.sortedRounds.last,
-               let firstScore = lastRound.sortedScores.first,
-               firstScore.player.id == self.id {
-                wonGames += 1
-            }
-        }
-        gamesWon = Int32(wonGames)
-        
-        // Update average position
         var totalPosition = 0
-        var positionCount = 0
+        var totalGameScore: Int32 = 0
         
-        for game in allGames {
-            guard let lastRound = game.sortedRounds.last else { continue }
+        for game in completedGames {
+            // Check if this player won the game
+            let snapshots = game.playerSnapshotsArray.sorted(by: { $0.position < $1.position })
+            if !snapshots.isEmpty && snapshots.first?.id == self.id {
+                wonGames += 1
+                print("🔢 Player \(name) won game \(game.id)")
+            }
             
-            for (index, score) in lastRound.sortedScores.enumerated() {
-                if score.player.id == self.id {
-                    totalPosition += index + 1
-                    positionCount += 1
-                    break
+            // Get player position from snapshots
+            if let playerSnapshot = game.playerSnapshotsArray.first(where: { $0.id == self.id }) {
+                totalPosition += playerSnapshot.position
+                totalGameScore += Int32(playerSnapshot.score)
+                print("🔢 Player \(name) position: \(playerSnapshot.position), score: \(playerSnapshot.score)")
+            } else {
+                // If no snapshot, try to calculate from the last round
+                if let lastRound = game.sortedRounds.last {
+                    // Find player's position in the sorted scores
+                    for (index, scoreEntry) in lastRound.sortedScores.enumerated() {
+                        if scoreEntry.player.id == self.id {
+                            totalPosition += index + 1
+                            totalGameScore += scoreEntry.score
+                            print("🔢 Player \(name) calculated position: \(index + 1), score: \(scoreEntry.score)")
+                            break
+                        }
+                    }
                 }
             }
         }
         
-        if positionCount > 0 {
-            averagePosition = Double(totalPosition) / Double(positionCount)
+        // Update games won
+        gamesWon = Int32(wonGames)
+        
+        // Update average position
+        if completedGames.count > 0 {
+            averagePosition = Double(totalPosition) / Double(completedGames.count)
         } else {
             averagePosition = 0
         }
         
         // Update total score
-        totalScore = scores.reduce(0, +)
+        totalScore = totalGameScore
+        
+        print("🔢 Statistics updated for \(name): played=\(gamesPlayed), won=\(gamesWon), avg pos=\(averagePosition), score=\(totalScore)")
     }
     
     // MARK: - Game Management

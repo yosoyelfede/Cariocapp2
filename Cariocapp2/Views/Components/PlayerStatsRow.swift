@@ -11,9 +11,11 @@ struct PlayerStatsRow: View {
                 
                 Spacer()
                 
-                Text("\(Int(player.gamesWon)) wins")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                if player.gamesPlayed > 0 {
+                    Text("\(Int(player.gamesWon)) wins")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
             }
             
             HStack(spacing: 16) {
@@ -22,15 +24,27 @@ struct PlayerStatsRow: View {
                     value: "\(Int(player.gamesPlayed))"
                 )
                 
-                StatLabel(
-                    title: "Win Rate",
-                    value: String(format: "%.0f%%", player.winRate * 100)
-                )
-                
-                StatLabel(
-                    title: "Avg Score",
-                    value: String(format: "%.1f", Double(player.totalScore) / Double(max(1, player.gamesPlayed)))
-                )
+                if player.gamesPlayed > 0 {
+                    StatLabel(
+                        title: "Win Rate",
+                        value: String(format: "%.0f%%", player.winRate * 100)
+                    )
+                    
+                    StatLabel(
+                        title: "Avg Position",
+                        value: String(format: "%.1f", player.averagePosition)
+                    )
+                    
+                    StatLabel(
+                        title: "Total Score",
+                        value: "\(player.totalScore)"
+                    )
+                } else {
+                    Text("No games played yet")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .italic()
+                }
             }
             .font(.caption)
         }
