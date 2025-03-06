@@ -168,31 +168,20 @@ extension Player {
         var totalGameScore: Int32 = 0
         
         for (_, game) in uniqueGames {
-            // Check if this player won the game
-            let snapshots = game.playerSnapshotsArray.sorted(by: { $0.position < $1.position })
-            if !snapshots.isEmpty && snapshots.first?.id == self.id {
+            // Get the player snapshots for this game
+            let snapshots = game.playerSnapshotsArray
+            
+            // Check if this player won the game (position 1)
+            if let playerSnapshot = snapshots.first(where: { $0.id == self.id && $0.position == 1 }) {
                 wonGames += 1
                 print("🔢 Player \(name) won game \(game.id)")
             }
             
-            // Get player position from snapshots
-            if let playerSnapshot = game.playerSnapshotsArray.first(where: { $0.id == self.id }) {
+            // Get player position and score from snapshots
+            if let playerSnapshot = snapshots.first(where: { $0.id == self.id }) {
                 totalPosition += playerSnapshot.position
                 totalGameScore += Int32(playerSnapshot.score)
                 print("🔢 Player \(name) position: \(playerSnapshot.position), score: \(playerSnapshot.score)")
-            } else {
-                // If no snapshot, try to calculate from the last round
-                if let lastRound = game.sortedRounds.last {
-                    // Find player's position in the sorted scores
-                    for (index, scoreEntry) in lastRound.sortedScores.enumerated() {
-                        if scoreEntry.player.id == self.id {
-                            totalPosition += index + 1
-                            totalGameScore += scoreEntry.score
-                            print("🔢 Player \(name) calculated position: \(index + 1), score: \(scoreEntry.score)")
-                            break
-                        }
-                    }
-                }
             }
         }
         

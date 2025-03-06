@@ -34,7 +34,7 @@ struct GameHistoryView: View {
                             gameToDelete = game
                             showingDeleteConfirmation = true
                         }
-                        .background(selectedGame?.id == game.id ? Color.accentColor.opacity(0.1) : Color.clear)
+                        .background(selectedGame?.id == game.id ? Color.clear : Color.clear)
                         .cornerRadius(8)
                 }
                 .listStyle(SidebarListStyle())
@@ -232,7 +232,13 @@ struct GameHistoryView: View {
                 }
                 
                 // Get all players from the game before deleting it
-                let playersToUpdate = game.playersArray
+                let playersToUpdate = Array(game.playersArray)
+                
+                // Disable Core Data validation temporarily for this context
+                viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+                
+                // Call cleanup to properly handle relationships
+                game.cleanup()
                 
                 // Delete the game
                 viewContext.delete(game)
