@@ -27,11 +27,11 @@ struct RulesView: View {
                     .padding(.top)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    BulletPoint("Players: 2-4 players")
-                    BulletPoint("Cards: Two standard 52-card decks with jokers")
-                    BulletPoint("Deal: 12 cards per player")
-                    BulletPoint("Turn order: Clockwise")
-                    BulletPoint("Dealer rotates: After each round")
+                    BulletPoint(text: "Players: 2-4 players")
+                    BulletPoint(text: "Cards: Two standard 52-card decks with jokers")
+                    BulletPoint(text: "Deal: 12 cards per player")
+                    BulletPoint(text: "Turn order: Clockwise")
+                    BulletPoint(text: "Dealer rotates: After each round")
                 }
                 .foregroundColor(.secondary)
             }
@@ -46,10 +46,10 @@ struct RulesView: View {
                     .font(.headline)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    BulletPoint("On your turn, draw a card from the deck or pick up the top discard")
-                    BulletPoint("Form the required combinations for the round")
-                    BulletPoint("Discard one card to end your turn")
-                    BulletPoint("First player to complete the round's combination and go out wins")
+                    BulletPoint(text: "On your turn, draw a card from the deck or pick up the top discard")
+                    BulletPoint(text: "Form the required combinations for the round")
+                    BulletPoint(text: "Discard one card to end your turn")
+                    BulletPoint(text: "First player to complete the round's combination and go out wins")
                 }
                 .foregroundColor(.secondary)
             }
@@ -68,27 +68,12 @@ struct RulesView: View {
     private var scoringSection: some View {
         Section("Scoring") {
             VStack(alignment: .leading, spacing: 8) {
-                BulletPoint("The first player to complete the round's combinations and go out wins")
-                BulletPoint("The winner gets 0 points")
-                BulletPoint("Other players get points based on their remaining cards")
-                BulletPoint("Lower scores are better")
+                BulletPoint(text: "The first player to complete the round's combinations and go out wins")
+                BulletPoint(text: "The winner gets 0 points")
+                BulletPoint(text: "Other players get points based on their remaining cards")
+                BulletPoint(text: "Lower scores are better")
             }
             .padding(.vertical, 4)
-        }
-    }
-}
-
-struct BulletPoint: View {
-    let text: String
-    
-    init(_ text: String) {
-        self.text = text
-    }
-    
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("•")
-            Text(text)
         }
     }
 }

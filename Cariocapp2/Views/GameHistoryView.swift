@@ -18,6 +18,10 @@ struct GameHistoryView: View {
                 List(completedGames, selection: $selectedGame) { game in
                     GameHistoryListRow(game: game)
                         .tag(game)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedGame = game
+                        }
                         .contextMenu {
                             Button(role: .destructive) {
                                 gameToDelete = game
@@ -30,6 +34,8 @@ struct GameHistoryView: View {
                             gameToDelete = game
                             showingDeleteConfirmation = true
                         }
+                        .background(selectedGame?.id == game.id ? Color.accentColor.opacity(0.1) : Color.clear)
+                        .cornerRadius(8)
                 }
                 .listStyle(SidebarListStyle())
                 .overlay {
@@ -48,6 +54,15 @@ struct GameHistoryView: View {
                 }
             }
             .navigationTitle("Game History")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !completedGames.isEmpty {
+                        Text("Tap a game to view details")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
             .refreshable {
                 await loadCompletedGames()
             }
@@ -73,8 +88,9 @@ struct GameHistoryView: View {
                 ContentUnavailableView(
                     "No Game Selected",
                     systemImage: "gamecontroller",
-                    description: Text("Select a game to view details")
+                    description: Text("Select a game from the list to view details")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {
@@ -215,11 +231,27 @@ struct GameHistoryView: View {
                     selectedGame = nil
                 }
                 
+                // Get all players from the game before deleting it
+                let playersToUpdate = game.playersArray
+                
                 // Delete the game
                 viewContext.delete(game)
                 
                 // Save changes
                 try viewContext.save()
+                
+                // Update statistics for affected players
+                print("🗑️ Updating statistics for \(playersToUpdate.count) affected players")
+                for player in playersToUpdate {
+                    if !player.isDeleted && player.managedObjectContext != nil {
+                        player.updateStatistics()
+                    }
+                }
+                
+                // Save again after updating player statistics
+                if viewContext.hasChanges {
+                    try viewContext.save()
+                }
                 
                 // Refresh the list
                 await loadCompletedGames()
@@ -258,6 +290,20 @@ private struct GameHistoryListRow: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
+            }
+            
+            // Winner
+            if let winner = game.playerSnapshotsArray.sorted(by: { $0.position < $1.position }).first {
+                HStack(alignment: .center, spacing: 4) {
+                    Image(systemName: "trophy")
+                        .foregroundColor(.yellow)
+                        .font(.caption)
+                    
+                    Text("Winner: \(winner.name)")
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 8)
