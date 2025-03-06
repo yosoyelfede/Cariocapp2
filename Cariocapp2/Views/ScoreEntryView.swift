@@ -12,20 +12,19 @@ struct ScoreEntryView: View {
     let gameID: UUID
     
     // MARK: - State
-    @State private var scores: [UUID: String] = [:]  // Keep as String for text input
+    @State private var scores: [UUID: Int32] = [:]  // Changed from String to Int32
     @State private var isConfirmationPresented = false
     @State private var error: Error?
     @State private var isErrorPresented = false
+    @State private var isScoreValid = false
     
     // MARK: - Constants
     private let maxScore = 999
-    private let scoreRegex = try! NSRegularExpression(pattern: "^[0-9]*$")
     
     // MARK: - Initialization
     init(gameID: UUID) {
         self.gameID = gameID
-        let coordinator = GameCoordinator(viewContext: PersistenceController.shared.container.viewContext)
-        self._viewModel = StateObject(wrappedValue: GameViewModel.instance(for: gameID, coordinator: coordinator))
+        self._viewModel = StateObject(wrappedValue: GameViewModel.instance(for: gameID))
     }
     
     var body: some View {
@@ -37,15 +36,30 @@ struct ScoreEntryView: View {
                             ScoreEntryRow(
                                 player: player,
                                 score: binding(for: player),
-                                onScoreChange: { newValue in
-                                    validateScore(newValue, for: player)
-                                }
+                                onIncrement: { incrementScore(for: player) },
+                                onDecrement: { decrementScore(for: player) }
                             )
                         }
                     } header: {
                         Text("Enter scores for \(game.currentRoundDescription)")
                     } footer: {
-                        Text("Enter the score for each player. Lower scores are better.")
+                        // Validation status
+                        HStack {
+                            if !isScoreValid {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text("Exactly one player must have a score of 0")
+                                    .font(.footnote)
+                                    .foregroundColor(.orange)
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Scores are valid")
+                                    .font(.footnote)
+                                    .foregroundColor(.green)
+                            }
+                        }
+                        .padding(.top, 8)
                     }
                 }
                 .navigationTitle("Enter Scores")
@@ -59,10 +73,9 @@ struct ScoreEntryView: View {
                     
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
-                            if validateScores() {
-                                validateAndSubmitScores()
-                            }
+                            validateAndSubmitScores()
                         }
+                        .disabled(!isScoreValid)
                     }
                 }
             } else {
@@ -93,9 +106,11 @@ struct ScoreEntryView: View {
                     initializeGameState()
                 }
             } catch {
-                self.error = error
-                isErrorPresented = true
+                showError("Error loading game: \(error.localizedDescription)")
             }
+        }
+        .onChange(of: scores) { _, _ in
+            validateScores()
         }
     }
     
@@ -104,124 +119,79 @@ struct ScoreEntryView: View {
         guard let game = viewModel.game else { return }
         
         for player in game.playersArray {
-            scores[player.id] = ""
+            scores[player.id] = 0
         }
+        validateScores()
     }
     
-    private var canSave: Bool {
-        guard let game = viewModel.game,
-              !scores.isEmpty else { return false }
-        
-        // All scores must be valid numbers
-        for (_, score) in scores {
-            if !isValidScore(score) {
-                return false
-            }
-        }
-        
-        // At least one player must have a score of 0 (winner)
-        return scores.values.contains { Int($0) == 0 }
-    }
-    
-    private func binding(for player: Player) -> Binding<String> {
+    private func binding(for player: Player) -> Binding<Int32> {
         Binding(
-            get: { scores[player.id] ?? "" },
-            set: { scores[player.id] = $0 }
+            get: { scores[player.id] ?? 0 },
+            set: { newValue in
+                if newValue >= 0 {
+                    scores[player.id] = newValue
+                }
+            }
         )
     }
     
-    private func validateScore(_ score: String, for player: Player) {
-        // Empty score is allowed during input
-        guard !score.isEmpty else { return }
-        
-        // Validate numeric input
-        let range = NSRange(location: 0, length: score.utf16.count)
-        if scoreRegex.firstMatch(in: score, range: range) == nil {
-            scores[player.id] = String(score.filter { $0.isNumber })
+    private func incrementScore(for player: Player) {
+        let currentScore = scores[player.id] ?? 0
+        if currentScore < maxScore {
+            scores[player.id] = currentScore + 1
+        }
+    }
+    
+    private func decrementScore(for player: Player) {
+        let currentScore = scores[player.id] ?? 0
+        if currentScore > 0 {
+            scores[player.id] = currentScore - 1
+        }
+    }
+    
+    private func validateScores() {
+        guard let game = viewModel.game else {
+            isScoreValid = false
             return
         }
         
-        // Validate maximum score
-        if let numericScore = Int32(score), numericScore > maxScore {
-            scores[player.id] = String(maxScore)
-            showError("Maximum score is \(maxScore)")
-        }
-    }
-    
-    private var hasZeroScore: Bool {
-        return scores.values.contains { score in
-            guard let numericScore = Int32(score) else { return false }
-            return numericScore == 0
-        }
-    }
-    
-    private func validateScoreInput(_ score: String) -> Bool {
-        guard let numericScore = Int32(score) else { return false }
-        return numericScore >= 0
-    }
-    
-    private func isValidScore(_ score: String) -> Bool {
-        guard let _ = Int32(score) else { return false }
-        return true
-    }
-    
-    private func validateScores() -> Bool {
-        guard let game = viewModel.game else { return false }
-        
         // Check if all scores are entered
         guard scores.count == game.playersArray.count else {
-            showError("Please enter scores for all players")
-            return false
+            isScoreValid = false
+            return
         }
         
-        // Check if all scores are valid numbers
-        for (_, score) in scores {
-            guard isValidScore(score) else {
-                showError("Please enter valid numbers for all scores")
-                return false
-            }
-        }
+        // Count players with score of 0
+        let zeroScoreCount = scores.values.filter { $0 == 0 }.count
         
-        // Check if at least one player has a score of 0
-        let hasZeroScore = scores.values.contains { score in
-            guard let numericScore = Int32(score) else { return false }
-            return numericScore == 0
-        }
-        
-        if !hasZeroScore {
-            showError("At least one player must have a score of 0")
-            return false
-        }
-        
-        return true
+        // Valid if exactly one player has a score of 0 and all players have scores
+        isScoreValid = zeroScoreCount == 1
     }
     
     private func validateAndSubmitScores() {
-        guard validateScores() else { return }
+        guard isScoreValid else { return }
         isConfirmationPresented = true
         
-        // Convert scores to Int32 to match Core Data
+        // Convert scores to the format expected by the view model
         var finalScores: [String: Int32] = [:]
-        for (playerID, scoreString) in scores {
-            if let score = Int32(scoreString) {  // Convert directly to Int32
-                finalScores[playerID.uuidString] = score  // Convert UUID to String
-            }
+        for (playerID, score) in scores {
+            finalScores[playerID.uuidString] = score
         }
         
         Task {
             do {
                 try await viewModel.submitScores(finalScores)
                 
-                // Check if this was the final round
-                if let game = viewModel.game,
-                   game.currentRound == Int16(game.maxRounds) {
-                    navigationCoordinator.presentGameCompletion(for: gameID)
+                // Check if this was the final round and game is complete
+                if let game = viewModel.game, game.isComplete {
+                    print("🎮 Game is complete, navigating to game summary")
+                    navigationCoordinator.dismissSheet()
+                    navigationCoordinator.navigateToGameSummary(gameID)
                 } else {
                     navigationCoordinator.dismissSheet()
                 }
             } catch {
-                self.error = error
-                isErrorPresented = true
+                showError("Error saving scores: \(error.localizedDescription)")
             }
         }
     }
@@ -240,23 +210,51 @@ struct ScoreEntryView: View {
 // MARK: - Supporting Views
 private struct ScoreEntryRow: View {
     let player: Player
-    let score: Binding<String>
-    let onScoreChange: (String) -> Void
+    let score: Binding<Int32>
+    let onIncrement: () -> Void
+    let onDecrement: () -> Void
     
     var body: some View {
         HStack {
             Text(player.name)
                 .font(.headline)
+            
             Spacer()
-            TextField("Score", text: score)
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.trailing)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .frame(width: 80)
-                .onChange(of: score.wrappedValue) { _, newValue in
-                    onScoreChange(newValue)
+            
+            HStack(spacing: 0) {
+                Button {
+                    onDecrement()
+                } label: {
+                    Image(systemName: "minus")
+                        .padding(8)
                 }
+                .disabled(score.wrappedValue == 0)
+                
+                TextField("Score", value: score, format: .number)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 60)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(.tertiarySystemFill))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(score.wrappedValue == 0 ? Color.green : Color.clear, lineWidth: 2)
+                    )
+                
+                Button {
+                    onIncrement()
+                } label: {
+                    Image(systemName: "plus")
+                        .padding(8)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.quaternarySystemFill))
+            )
         }
     }
 }

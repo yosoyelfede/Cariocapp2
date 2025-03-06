@@ -40,6 +40,7 @@ final class NavigationCoordinator: ObservableObject {
     
     // MARK: - Properties
     private var viewContext: NSManagedObjectContext
+    private var navigationInProgress = false
     
     // MARK: - Initialization
     init(viewContext: NSManagedObjectContext) {
@@ -48,40 +49,79 @@ final class NavigationCoordinator: ObservableObject {
     
     // MARK: - Navigation Methods
     func navigateToGame(_ gameID: UUID) {
-        path.append(.game(gameID))
+        withAnimation(.easeInOut) {
+            path.append(.game(gameID))
+        }
     }
     
     func navigateToGameSummary(_ gameID: UUID) {
-        path.append(.gameCompletion(gameID))
-    }
-    
-    func presentGameCompletion(for gameID: UUID) {
-        presentedSheet = .gameCompletion(gameID: gameID)
-    }
-    
-    func presentScoreEntry(for gameID: UUID) {
-        presentedSheet = .scoreEntry(gameID: gameID)
-    }
-    
-    func presentScoreEdit(for gameID: UUID) {
-        presentedSheet = .scoreEntry(gameID: gameID)
+        withAnimation(.easeInOut) {
+            // If we're already deep in navigation, pop to root first
+            if path.count > 1 {
+                path.removeAll()
+                
+                // Use a slight delay to make the transition smoother
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.easeInOut) {
+                        self.path.append(.gameCompletion(gameID))
+                    }
+                }
+            } else {
+                path.append(.gameCompletion(gameID))
+            }
+        }
     }
     
     func presentGameMenu(for gameID: UUID) {
-        presentedSheet = .gameMenu(gameID: gameID)
+        withAnimation(.easeInOut) {
+            presentedSheet = .gameMenu(gameID: gameID)
+        }
+    }
+    
+    func presentScoreEntry(for gameID: UUID) {
+        withAnimation(.easeInOut) {
+            presentedSheet = .scoreEntry(gameID: gameID)
+        }
+    }
+    
+    func presentScoreEdit(for gameID: UUID) {
+        withAnimation(.easeInOut) {
+            presentedSheet = .scoreEntry(gameID: gameID)
+        }
     }
     
     func dismissSheet() {
-        presentedSheet = nil
+        withAnimation(.easeInOut) {
+            presentedSheet = nil
+        }
     }
     
     func popToRoot() {
-        path.removeAll()
-        presentedSheet = nil
+        guard !navigationInProgress else { return }
+        navigationInProgress = true
+        
+        withAnimation(.easeInOut) {
+            path.removeAll()
+            
+            // Reset the flag after animation completes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.navigationInProgress = false
+            }
+        }
     }
     
     func pop() {
-        path.removeLast()
+        guard !navigationInProgress && !path.isEmpty else { return }
+        navigationInProgress = true
+        
+        withAnimation(.easeInOut) {
+            path.removeLast()
+            
+            // Reset the flag after animation completes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.navigationInProgress = false
+            }
+        }
     }
     
     // MARK: - Game Flow Methods
@@ -102,18 +142,24 @@ final class NavigationCoordinator: ObservableObject {
         // Update navigation
         await MainActor.run {
             // Clear any presented sheets
-            presentedSheet = nil
-            // Pop to root
-            path.removeAll()
+            withAnimation(.easeInOut) {
+                presentedSheet = nil
+            }
+            
+            // Pop to root with animation
+            withAnimation(.easeInOut) {
+                path.removeAll()
+            }
         }
     }
     
     func refreshGameState(_ gameID: UUID) async throws {
-        guard let game = try await fetchGame(gameID) else { return }
-        
-        // Notify any observers that the game state has changed
-        await MainActor.run {
-            objectWillChange.send()
+        let game = try await fetchGame(gameID)
+        if game != nil {
+            // Notify any observers that the game state has changed
+            await MainActor.run {
+                objectWillChange.send()
+            }
         }
     }
     

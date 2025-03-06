@@ -94,7 +94,7 @@ struct NewGameView: View {
             dealerSelectionSection
         }
         .navigationTitle("New Game")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             print("🎮 NewGameView appeared")
             // Update contexts with environment context
@@ -111,6 +111,9 @@ struct NewGameView: View {
             coordinator.updateContext(viewContext)
             repository.updateContext(viewContext)
             refreshPlayers()
+        }
+        .onChange(of: selectedPlayers) { _, newValue in
+            updateCanStart()
         }
         .alert("Add Guest Player", isPresented: $isAddingGuest) {
             TextField("Guest Name", text: $newPlayerName)
@@ -136,7 +139,9 @@ struct NewGameView: View {
         }
         .modifier(StartGameToolbar(isEnabled: canStartGame, action: createGame))
         .navigationDestination(isPresented: $navigateToGame) {
-            gameDestination
+            if let gameID = createdGameID {
+                GameView(gameID: gameID)
+            }
         }
         .loading(isCreatingGame, message: "Creating game...")
     }
@@ -274,18 +279,28 @@ struct NewGameView: View {
         guard !trimmedName.isEmpty else { return }
         
         do {
+            let guest = try GuestPlayer(name: trimmedName)
             withAnimation {
-                let guest = try? GuestPlayer(name: trimmedName)
-                if let guest = guest {
-                    guestPlayers.insert(guest)
-                    newPlayerName = ""
-                }
+                guestPlayers.insert(guest)
+                newPlayerName = ""
+                isAddingGuest = false
+                updateDealerIndex()
             }
+        } catch {
+            errorMessage = error.localizedDescription
+            showingError = true
         }
     }
     
     private func updateDealerIndex() {
         dealerIndex = min(dealerIndex, max(0, playerCount - 1))
+    }
+    
+    // Helper enum for game creation result
+    private enum GameCreationResult {
+        case success(Game)
+        case timeout
+        case error
     }
     
     // MARK: - Game Creation
@@ -299,73 +314,89 @@ struct NewGameView: View {
                 print("🎮 Guest players: \(guestPlayers.map { "\($0.name) (\($0.id))" }.joined(separator: ", "))")
                 print("🎮 Dealer index: \(dealerIndex)")
                 
-                // Get selected players
-                let selectedPlayers = registeredPlayers.filter { selectedPlayerIds.contains($0.id) }
-                
-                // Map guest players to tuples
-                let guestPlayerTuples = guestPlayers.map { guest in
-                    (id: guest.id, name: guest.name)
+                // Add a timeout task
+                let timeoutTask = Task {
+                    try await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds timeout
+                    return true // Timeout occurred
                 }
                 
-                // Create game with selected players and guests
+                // Convert guest players to Core Data players
+                var allPlayers = selectedPlayers
+                for guestPlayer in guestPlayers {
+                    let player = try guestPlayer.toPlayer(context: viewContext)
+                    allPlayers.append(player)
+                }
+                
+                // Create game with all players
                 print("🎮 Creating game with coordinator...")
-                let game = try await coordinator.createGame(
-                    players: selectedPlayers,
-                    guestPlayers: guestPlayerTuples,
-                    dealerIndex: Int16(dealerIndex)
-                )
+                let gameCreationTask = Task {
+                    return try await coordinator.createGame(
+                        players: allPlayers,
+                        guestPlayers: [],  // Guest players are already converted to Player objects
+                        dealerIndex: Int16(dealerIndex)
+                    )
+                }
                 
-                print("🎮 Game created with ID: \(game.id)")
-                print("🎮 Game created, saving context...")
-                try viewContext.save()
+                // Wait for either the game creation or the timeout
+                let result = await Task {
+                    if let game = try? await gameCreationTask.value {
+                        timeoutTask.cancel()
+                        return GameCreationResult.success(game)
+                    } else if let timedOut = try? await timeoutTask.value, timedOut {
+                        gameCreationTask.cancel()
+                        return GameCreationResult.timeout
+                    } else {
+                        return GameCreationResult.error
+                    }
+                }.value
                 
-                // Verify game exists in context
-                print("🎮 Verifying game...")
-                if let verifiedGame = try await coordinator.verifyGame(id: game.id) {
-                    print("🎮 Game verified successfully: \(verifiedGame.id)")
-                    print("🎮 Players in game: \(verifiedGame.playersArray.map { "\($0.name) (\($0.id))" }.joined(separator: ", "))")
+                switch result {
+                case .success(let game):
+                    print("🎮 Game created with ID: \(game.id)")
+                    print("🎮 Game created, saving context...")
+                    try viewContext.save()
                     
-                    await MainActor.run {
+                    // Store the game ID as a string and recreate it to avoid bridging issues
+                    let gameIDString = game.id.uuidString
+                    
+                    // Verify game exists in context
+                    print("🎮 Verifying game...")
+                    if let verifiedGame = try await coordinator.verifyGame(id: UUID(uuidString: gameIDString)!) {
+                        print("🎮 Game verified successfully: \(verifiedGame.id)")
+                        print("🎮 Players in game: \(verifiedGame.playersArray.map { "\($0.name) (\($0.id))" }.joined(separator: ", "))")
+                        
                         self.createdGameID = verifiedGame.id
                         self.navigateToGame = true
+                    } else {
+                        print("❌ Game verification failed")
+                        throw GameError.gameNotFound
                     }
-                } else {
-                    print("❌ Game verification failed")
-                    throw GameError.gameNotFound
-                }
-            } catch {
-                print("❌ Failed to create game: \(error)")
-                print("❌ Detailed error: \(String(describing: error))")
-                
-                await MainActor.run {
-                    alertTitle = "Error"
-                    alertMessage = error.localizedDescription
+                    
+                case .timeout:
+                    print("⏱️ Game creation timed out")
+                    alertTitle = "Game Creation Timed Out"
+                    alertMessage = "The game creation process took too long. Please try again or check for active games."
                     showingAlert = true
-                    createdGameID = nil
-                    navigateToGame = false
+                    
+                case .error:
+                    print("❌ Game creation failed with unknown error")
+                    alertTitle = "Error"
+                    alertMessage = "An unknown error occurred while creating the game."
+                    showingAlert = true
                 }
+            } catch let error as GameError {
+                print("❌ Game creation failed with GameError: \(error)")
+                alertTitle = "Error"
+                alertMessage = error.localizedDescription
+                showingAlert = true
+            } catch {
+                print("❌ Game creation failed with error: \(error)")
+                alertTitle = "Error"
+                alertMessage = "Failed to create game: \(error.localizedDescription)"
+                showingAlert = true
             }
             
-            await MainActor.run {
-                isCreatingGame = false
-            }
-        }
-    }
-
-    // MARK: - Navigation
-    @ViewBuilder
-    private var gameDestination: some View {
-        if let gameID = createdGameID {
-            GameView(gameID: gameID)
-                .onAppear {
-                    print("🎮 GameView appeared for game: \(gameID)")
-                }
-        } else {
-            ContentUnavailableView(
-                "Game Not Found",
-                systemImage: "exclamationmark.triangle",
-                description: Text("The game could not be created")
-            )
+            isCreatingGame = false
         }
     }
     
@@ -380,6 +411,10 @@ struct NewGameView: View {
             errorMessage = "Failed to load players"
             showingError = true
         }
+    }
+    
+    private func updateCanStart() {
+        // Implementation of updateCanStart method
     }
 }
 

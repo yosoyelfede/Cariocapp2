@@ -13,18 +13,25 @@ struct ContentView: View {
                     switch destination {
                     case .newGame:
                         NewGameView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     case .game(let gameID):
                         GameView(gameID: gameID)
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     case .gameCompletion(let gameID):
                         GameCompletionView(gameID: gameID)
+                            .transition(.opacity)
                     case .players:
                         PlayerManagementView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     case .rules:
                         RulesView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     case .statistics:
                         StatisticsView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     case .gameHistory:
                         GameHistoryView()
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                     }
                 }
         }
@@ -33,16 +40,31 @@ struct ContentView: View {
                 switch sheet {
                 case .scoreEntry(let gameID):
                     ScoreEntryView(gameID: gameID)
+                        .transition(.move(edge: .bottom))
                 case .gameMenu(let gameID):
                     GameMenuView(gameID: gameID)
+                        .transition(.move(edge: .bottom))
                 case .gameCompletion(let gameID):
                     GameCompletionView(gameID: gameID)
+                        .transition(.opacity)
                 }
             }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .environmentObject(coordinator)
         .onAppear {
             coordinator.updateContext(viewContext)
+            
+            // Configure global animation settings
+            UIView.appearance().tintAdjustmentMode = .normal
+            
+            // Configure navigation bar appearance
+            let appearance = UINavigationBarAppearance()
+            appearance.configureWithDefaultBackground()
+            UINavigationBar.appearance().standardAppearance = appearance
+            UINavigationBar.appearance().compactAppearance = appearance
+            UINavigationBar.appearance().scrollEdgeAppearance = appearance
         }
     }
 }

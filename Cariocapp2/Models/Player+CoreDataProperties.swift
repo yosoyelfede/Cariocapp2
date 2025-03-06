@@ -134,10 +134,14 @@ extension Player {
     
     // MARK: - Statistics Management
     public func updateStatistics() {
-        guard let allGames = games?.allObjects as? [Game] else { return }
+        // Reset statistics before recalculating
+        gamesPlayed = 0
+        gamesWon = 0
+        totalScore = 0
+        averagePosition = 0
         
-        // Filter to only include completed games
-        let completedGames = allGames.filter { !$0.isActive && $0.endDate != nil }
+        // Get all completed games with unique IDs
+        let completedGames = self.completedGames
         
         // Create a dictionary to ensure uniqueness by game ID
         var uniqueGames: [UUID: Game] = [:]
@@ -146,12 +150,6 @@ extension Player {
         }
         
         print("🔢 Updating statistics for player \(name) - \(uniqueGames.count) unique completed games")
-        
-        // Reset statistics before recalculating
-        gamesPlayed = 0
-        gamesWon = 0
-        totalScore = 0
-        averagePosition = 0
         
         // No games played? Just return
         if uniqueGames.isEmpty {
@@ -162,26 +160,32 @@ extension Player {
         // Update games played
         gamesPlayed = Int32(uniqueGames.count)
         
-        // Update games won
+        // Calculate statistics
         var wonGames = 0
         var totalPosition = 0
         var totalGameScore: Int32 = 0
         
         for (_, game) in uniqueGames {
-            // Get the player snapshots for this game
-            let snapshots = game.playerSnapshotsArray
-            
-            // Check if this player won the game (position 1)
-            if let playerSnapshot = snapshots.first(where: { $0.id == self.id && $0.position == 1 }) {
-                wonGames += 1
-                print("🔢 Player \(name) won game \(game.id)")
+            // Only process games that have player snapshots
+            guard !game.playerSnapshotsArray.isEmpty else {
+                print("🔢 Game \(game.id) has no player snapshots, skipping")
+                continue
             }
             
-            // Get player position and score from snapshots
-            if let playerSnapshot = snapshots.first(where: { $0.id == self.id }) {
+            // Find this player's snapshot
+            if let playerSnapshot = game.playerSnapshotsArray.first(where: { $0.id == self.id }) {
+                // Check if player won (position 1)
+                if playerSnapshot.position == 1 {
+                    wonGames += 1
+                    print("🔢 Player \(name) won game \(game.id)")
+                }
+                
+                // Add position and score
                 totalPosition += playerSnapshot.position
                 totalGameScore += Int32(playerSnapshot.score)
-                print("🔢 Player \(name) position: \(playerSnapshot.position), score: \(playerSnapshot.score)")
+                print("🔢 Player \(name) position: \(playerSnapshot.position), score: \(playerSnapshot.score) in game \(game.id)")
+            } else {
+                print("🔢 Warning: Player \(name) has no snapshot in game \(game.id)")
             }
         }
         

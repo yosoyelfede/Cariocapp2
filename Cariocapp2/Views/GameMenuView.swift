@@ -91,8 +91,11 @@ struct GameMenuView: View {
             }
         }
         .sheet(isPresented: $showingScoreEdit) {
-            ScoreEditView(gameID: gameID)
-                .environmentObject(navigationCoordinator)
+            if let game = navigationCoordinator.getGame(id: gameID), 
+               let currentRound = game.roundsArray.first(where: { $0.number == game.currentRound }) {
+                ScoreEditView(gameID: gameID, roundID: currentRound.id)
+                    .environmentObject(navigationCoordinator)
+            }
         }
     }
     

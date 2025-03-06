@@ -44,6 +44,12 @@ public class Game: NSManagedObject {
     
     // MARK: - Static Methods
     static func createGame(players: [Player], dealerIndex: Int16, context: NSManagedObjectContext) throws -> Game {
+        // Clean up any abandoned games first
+        try cleanupAbandonedGames(in: context)
+        
+        // Clean up any active games for the selected players
+        try cleanupActiveGames(for: players, in: context)
+        
         // Validate input
         try validateGameCreation(players: players, dealerIndex: dealerIndex)
         
@@ -76,6 +82,61 @@ public class Game: NSManagedObject {
         try game.validateState()
         
         return game
+    }
+    
+    static func cleanupActiveGames(for players: [Player], in context: NSManagedObjectContext) throws {
+        print("🎮 Cleaning up active games for players")
+        
+        // Fetch all active games that include any of the selected players
+        let request = NSFetchRequest<Game>(entityName: Game.entityName)
+        let playerIds = players.map { $0.id.uuidString }
+        request.predicate = NSPredicate(format: "isActive == YES AND ANY players.id IN %@", playerIds)
+        
+        let activeGames = try context.fetch(request)
+        print("🎮 Found \(activeGames.count) active games to clean up")
+        
+        for game in activeGames {
+            print("🎮 Cleaning up active game: \(game.id)")
+            // Mark game as inactive
+            game.isActive = false
+            game.endDate = Date()
+            
+            // Clear relationships
+            if let gamePlayers = game.players as? Set<Player> {
+                for player in gamePlayers {
+                    print("🎮 Removing game from player: \(player.name)")
+                    if let playerGames = player.games as? Set<Game> {
+                        player.games = playerGames.filter { $0 != game } as NSSet
+                    }
+                }
+            }
+            game.players = NSSet()
+            
+            // Delete the game
+            context.delete(game)
+        }
+        
+        // Save changes
+        try context.save()
+        print("🎮 Active games cleanup completed")
+    }
+    
+    static func cleanupAbandonedGames(in context: NSManagedObjectContext) throws {
+        print("🎮 Cleaning up abandoned games")
+        let request = NSFetchRequest<Game>(entityName: Game.entityName)
+        request.predicate = NSPredicate(format: "isActive == YES AND startDate < %@", Date().addingTimeInterval(-3600 * 24) as NSDate)
+        
+        let abandonedGames = try context.fetch(request)
+        print("🎮 Found \(abandonedGames.count) abandoned games")
+        
+        for game in abandonedGames {
+            print("🎮 Cleaning up abandoned game: \(game.id)")
+            game.cleanup()
+            context.delete(game)
+        }
+        
+        try context.save()
+        print("🎮 Abandoned games cleanup completed")
     }
     
     private static func validateGameCreation(players: [Player], dealerIndex: Int16) throws {
@@ -128,7 +189,23 @@ public class Game: NSManagedObject {
     }
     
     // MARK: - Validation
+    override public func validateForDelete() throws {
+        // No validation needed during deletion
+        try super.validateForDelete()
+    }
+    
+    override public func validateForUpdate() throws {
+        // Only validate active games that aren't being deleted
+        if isActive && !isDeleted {
+            try validateState()
+        }
+        try super.validateForUpdate()
+    }
+    
     func validateState() throws {
+        // Skip validation for inactive games
+        guard isActive else { return }
+        
         // Validate basic properties
         guard id != UUID.init() else {
             throw ValidationError.invalidPlayerCount(0)
@@ -176,34 +253,45 @@ public class Game: NSManagedObject {
     
     // MARK: - Cleanup
     func cleanup() {
-        print("🎲 Game \(id) - Starting cleanup")
+        print("🎮 Starting cleanup for game: \(id)")
         
-        // Remove all rounds
-        if let rounds = rounds as? Set<Round> {
-            print("🎲 Game \(id) - Cleaning up \(rounds.count) rounds")
-            rounds.forEach { round in
-                removeFromRounds(round)
-                round.cleanup()
-                managedObjectContext?.delete(round)
+        if let context = managedObjectContext {
+            // Delete all rounds first
+            if let rounds = rounds as? Set<Round> {
+                for round in rounds {
+                    print("🎮 Deleting round: \(round.number)")
+                    round.scores = nil
+                    context.delete(round)
+                }
             }
-        }
-        
-        // Remove player relationships and delete guest players
-        if let players = players {
-            print("🎲 Game \(id) - Cleaning up relationships with \((players as? Set<Player>)?.count ?? 0) players")
-            self.players = nil
-            players.forEach { player in
-                if let player = player as? Player {
-                    if player.isGuest {
-                        // Delete guest player
-                        print("🎲 Game \(id) - Deleting guest player: \(player.name)")
-                        managedObjectContext?.delete(player)
+            rounds = NSSet()
+            
+            // Clear snapshots
+            playerSnapshots = nil
+            
+            // Clear player relationships and update player state
+            if let gamePlayers = players as? Set<Player> {
+                for player in gamePlayers {
+                    print("🎮 Removing game from player: \(player.name)")
+                    if var playerGames = player.games as? Set<Game> {
+                        playerGames.remove(self)
+                        player.games = playerGames as NSSet
                     }
                 }
             }
+            
+            // Clear the game's players relationship
+            players = NSSet()
+            
+            // Mark game as inactive
+            isActive = false
+            endDate = Date()
+            
+            print("🎮 Cleanup completed for game: \(id)")
+            
+            // Final save to ensure all changes are persisted
+            try? context.save()
         }
-        
-        print("🎲 Game \(id) - Cleanup complete")
     }
 }
 

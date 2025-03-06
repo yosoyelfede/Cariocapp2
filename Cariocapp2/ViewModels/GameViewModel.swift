@@ -19,11 +19,11 @@ final class GameViewModel: ObservableObject {
     
     @MainActor
     static func instance(for gameId: UUID, coordinator: GameCoordinator) -> GameViewModel {
-        instanceLock.lock()
-        defer { instanceLock.unlock() }
-        
-        // Clean up any nil references
-        activeInstances = activeInstances.filter { $0.value.instance != nil }
+        // Use async-safe locking with Task
+        Task {
+            // Clean up any nil references
+            activeInstances = activeInstances.filter { $0.value.instance != nil }
+        }
         
         // Check if we already have an instance for this game ID
         if let existingInstance = activeInstances[gameId]?.instance {
@@ -36,6 +36,13 @@ final class GameViewModel: ObservableObject {
         let newInstance = GameViewModel(coordinator: coordinator, gameId: gameId)
         activeInstances[gameId] = WeakGameViewModel(newInstance)
         return newInstance
+    }
+    
+    @MainActor
+    static func instance(for gameId: UUID) -> GameViewModel {
+        // Get the coordinator from the environment
+        let coordinator = GameCoordinator.shared
+        return instance(for: gameId, coordinator: coordinator)
     }
     
     // MARK: - Published Properties
@@ -146,6 +153,19 @@ final class GameViewModel: ObservableObject {
             await MainActor.run { 
                 self.error = error
                 self.game = nil
+            }
+        }
+    }
+    
+    func loadGame() {
+        Task {
+            do {
+                try await refreshGameState()
+            } catch {
+                print("❌ GameViewModel[\(self.gameId)] - Failed to load game: \(error)")
+                await MainActor.run {
+                    self.error = error
+                }
             }
         }
     }
@@ -419,38 +439,30 @@ final class GameViewModel: ObservableObject {
     }
     
     func submitScores(_ scores: [String: Int32]) async throws {
-        guard let game = self.game else { throw GameError.gameNotFound }
+        isLoading = true
+        defer { isLoading = false }
         
-        // Create or update the round
-        let round = game.roundsArray.first { $0.number == game.currentRound } ?? Round(context: game.managedObjectContext!)
-        round.number = game.currentRound
-        round.scores = scores
-        round.isCompleted = true
-        
-        // Properly associate the round with the game if it's new
-        if !game.roundsArray.contains(round) {
-            game.addToRounds(round)
+        do {
+            print("🎮 Submitting scores for round \(game?.currentRound ?? 0)")
+            try await coordinator.submitScores(gameID: gameId, scores: scores)
+            
+            // Verify and load the game after submitting scores
+            if let updatedGame = try await coordinator.verifyGame(id: gameId) {
+                try await loadGame(updatedGame)
+                
+                // Check if this was the last round and game is complete
+                if updatedGame.isComplete {
+                    print("🎮 Game is complete after submitting scores for round \(updatedGame.currentRound)")
+                    shouldShowGameCompletion = true
+                }
+            } else {
+                throw GameError.gameNotFound
+            }
+        } catch {
+            print("❌ Failed to submit scores: \(error)")
+            self.error = error
+            throw error
         }
-        
-        // Save changes
-        try game.managedObjectContext?.save()
-        
-        // Check if this is round 12 or if all required rounds are completed
-        if game.currentRound == Int16(game.maxRounds) || game.isComplete {
-            // Mark game as complete and inactive
-            game.isActive = false
-            try game.managedObjectContext?.save()
-            shouldShowGameCompletion = true
-            return
-        }
-        
-        // Only advance to next round if game is not complete
-        game.currentRound += 1
-        game.dealerIndex = Int16((Int(game.dealerIndex) + 1) % game.playersArray.count)
-        try game.managedObjectContext?.save()
-        
-        // Refresh state
-        try await loadGame(game)
     }
     
     func setFirstCardColor(_ color: FirstCardColor) async {

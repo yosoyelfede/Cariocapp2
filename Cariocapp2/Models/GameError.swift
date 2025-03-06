@@ -5,6 +5,7 @@ enum GameError: LocalizedError {
     case invalidDealerIndex(Int16, playerCount: Int)
     case gameNotFound
     case invalidGameState(String)
+    case playerInActiveGame(String)
     
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum GameError: LocalizedError {
             return "Game not found."
         case .invalidGameState(let message):
             return "Invalid game state: \(message)"
+        case .playerInActiveGame(let name):
+            return "Player '\(name)' is already in an active game"
         }
     }
 } 

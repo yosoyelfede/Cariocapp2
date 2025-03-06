@@ -36,6 +36,8 @@ struct GameView: View {
     
     let gameID: UUID
     
+    @State private var showError = false
+    
     init(gameID: UUID) {
         self.gameID = gameID
         let coordinator = DependencyContainer.shared.provideGameCoordinator()
@@ -55,13 +57,17 @@ struct GameView: View {
                 .background(Color(.systemBackground))
             } else if let game = viewModel.game {
                 if game.isComplete {
-                    ContentUnavailableView(
-                        "Game Completed",
-                        systemImage: "checkmark.circle",
-                        description: Text("This game has been completed. You can view the results in Game History.")
-                    )
-                    .onAppear {
-                        navigationCoordinator.popToRoot()
+                    if !game.playerSnapshotsArray.isEmpty {
+                        GameCompletionView(gameID: gameID)
+                    } else {
+                        ContentUnavailableView(
+                            "Game Completed",
+                            systemImage: "checkmark.circle",
+                            description: Text("This game has been completed. You can view the results in Game History.")
+                        )
+                        .onAppear {
+                            navigationCoordinator.popToRoot()
+                        }
                     }
                 } else {
                     gameContent(game)
@@ -96,7 +102,7 @@ struct GameView: View {
             }
             
             ToolbarItem(placement: .principal) {
-                Text("Round \(viewModel.currentRound)")
+                Text(viewModel.game?.isComplete == true ? "Game Complete" : "Round \(viewModel.currentRound)")
                     .font(.headline)
             }
         }
@@ -109,54 +115,39 @@ struct GameView: View {
                 print("❌ GameView - Failed to refresh game state: \(error)")
             }
         }
-        .onChange(of: viewContext) { _ in
-            print("🎮 GameView - Context changed for game: \(gameID)")
-            viewModel.coordinator.updateContext(viewContext)
-            Task {
-                do {
-                    try await viewModel.refreshGameState()
-                } catch {
-                    print("❌ GameView - Failed to refresh game state after context change: \(error)")
-                }
-            }
+        .onAppear {
+            viewModel.loadGame()
         }
-        .onChange(of: viewModel.shouldShowGameCompletion) { oldValue, newValue in
-            if newValue {
-                navigationCoordinator.presentGameCompletion(for: gameID)
+        .onChange(of: viewModel.error != nil) { _, hasError in
+            showError = hasError
+        }
+        .alert("Error", isPresented: $showError) {
+            Button("OK", role: .cancel) {
+                viewModel.clearError()
             }
+        } message: {
+            Text(viewModel.error?.localizedDescription ?? "An unknown error occurred")
         }
     }
     
     private func loadGameWithRetries() async {
         let maxRetries = 3
-        let retryDelay: UInt64 = 500_000_000 // 0.5 seconds
+        var retryCount = 0
         
-        for attempt in 1...maxRetries {
-            print("🎮 GameView - Loading attempt \(attempt)/\(maxRetries)")
-            
+        while retryCount < maxRetries {
             do {
-                if let game = try await viewModel.coordinator.verifyGame(id: gameID) {
-                    print("🎮 GameView - Game found on attempt \(attempt)")
-                    try await viewModel.loadGame(game)
-                    print("🎮 GameView - Game loaded successfully")
-                    return
-                }
-                
-                print("🎮 GameView - Game not found on attempt \(attempt)")
-                
-                if attempt < maxRetries {
-                    try await Task.sleep(nanoseconds: retryDelay)
-                }
+                try await viewModel.refreshGameState()
+                return
             } catch {
-                print("🎮 GameView - Error loading game on attempt \(attempt): \(error.localizedDescription)")
-                
-                if attempt < maxRetries {
-                    try? await Task.sleep(nanoseconds: retryDelay)
+                print("❌ GameView - Failed to load game (attempt \(retryCount + 1)/\(maxRetries)): \(error)")
+                retryCount += 1
+                if retryCount < maxRetries {
+                    try? await Task.sleep(nanoseconds: UInt64(1_000_000_000)) // Wait 1 second before retrying
                 }
             }
         }
         
-        print("🎮 GameView - Failed to load game after \(maxRetries) attempts")
+        print("❌ GameView - Failed to load game after \(maxRetries) attempts")
         viewModel.setError(GameError.gameNotFound)
     }
     

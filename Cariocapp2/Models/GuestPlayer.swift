@@ -52,7 +52,7 @@ struct GuestPlayer: Identifiable, Hashable, Codable {
     // MARK: - Conversion
     func toPlayer(context: NSManagedObjectContext) throws -> Player {
         let player = Player(context: context)
-        player.id = id
+        player.id = UUID()
         player.name = name
         player.gamesPlayed = 0
         player.gamesWon = 0

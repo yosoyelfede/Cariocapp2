@@ -15,6 +15,7 @@ enum GameCoordinatorError: LocalizedError {
     case invalidPlayerCount
     case contextError(String)
     case noPlayersSelected
+    case roundNotFound
     
     var errorDescription: String? {
         switch self {
@@ -42,6 +43,8 @@ enum GameCoordinatorError: LocalizedError {
             return "Context error: \(message)"
         case .noPlayersSelected:
             return "No players selected for the game"
+        case .roundNotFound:
+            return "Round not found"
         }
     }
 }
@@ -59,7 +62,10 @@ struct NewGameData {
 }
 
 @MainActor
-final class GameCoordinator: ObservableObject {
+class GameCoordinator: ObservableObject {
+    // MARK: - Shared Instance
+    static let shared = GameCoordinator(viewContext: PersistenceController.shared.container.viewContext)
+    
     // MARK: - Published Properties
     @Published private(set) var gameID: UUID?
     @Published private(set) var isDeleting = false
@@ -130,38 +136,33 @@ final class GameCoordinator: ObservableObject {
         return try await performTransaction { context in
             print("🎮 Starting game creation transaction")
             
-            // Create guest players
-            let guestPlayerObjects = try guestPlayers.map { guest -> Player in
-                print("🎮 Creating guest player: \(guest.name)")
-                let player = Player(context: context)
-                player.id = guest.id
-                player.name = guest.name
-                player.isGuest = true
-                player.createdAt = Date()
-                player.gamesPlayed = 0
-                player.gamesWon = 0
-                player.totalScore = 0
-                player.averagePosition = 0
-                try player.validate() // Validate each guest player
-                return player
+            // Validate registered players first
+            for player in players {
+                guard player.canJoinGame() else {
+                    print("❌ Player \(player.name) has active games: \(player.activeGames.map { $0.id })")
+                    throw AppError.invalidPlayerState("Player \(player.name) is already in an active game")
+                }
+                try player.validateState()
             }
             
             // Create game
             print("🎮 Creating game object")
             let game = Game(context: context)
-            game.id = UUID()
+            // Create a new UUID to avoid bridging issues
+            let gameID = UUID()
+            game.id = gameID
             game.startDate = Date()
             game.currentRound = 1
             game.dealerIndex = dealerIndex
             game.isActive = true
             
             // Add all players to the game
-            let allPlayers = players + guestPlayerObjects
-            game.players = NSSet(array: allPlayers)
+            game.players = NSSet(array: players)
             
             // Create initial round
             print("🎮 Creating initial round")
             let round = Round(context: context)
+            // Create a new UUID for the round to avoid bridging issues
             round.id = UUID()
             round.number = 1
             round.dealerIndex = dealerIndex
@@ -171,12 +172,24 @@ final class GameCoordinator: ObservableObject {
             round.game = game
             
             // Validate the entire game state
-            try game.validateState()
-            print("🎮 Game state validated successfully")
+            do {
+                try game.validateState()
+                print("🎮 Game state validated successfully")
+            } catch {
+                print("❌ Game validation failed: \(error)")
+                context.rollback()
+                throw error
+            }
             
             // Save context to ensure everything is persisted
-            try context.save()
-            print("🎮 Game creation transaction completed successfully")
+            do {
+                try context.save()
+                print("🎮 Game creation transaction completed successfully")
+            } catch {
+                print("❌ Failed to save game: \(error)")
+                context.rollback()
+                throw GameCoordinatorError.saveFailed(error)
+            }
             
             return game
         }
@@ -233,6 +246,9 @@ final class GameCoordinator: ObservableObject {
     func verifyGame(id: UUID, in context: NSManagedObjectContext? = nil) async throws -> Game? {
         let context = context ?? viewContext
         
+        // Convert UUID to string to avoid bridging issues
+        let idString = id.uuidString
+        
         let fetchRequest = NSFetchRequest<Game>(entityName: "Game")
         fetchRequest.predicate = NSPredicate(format: "id == %@", id as CVarArg)
         
@@ -251,7 +267,7 @@ final class GameCoordinator: ObservableObject {
         _ = game.rounds?.count
         
         // Print detailed game state for debugging
-        print("🎮 Game verification for game \(id):")
+        print("🎮 Game verification for game \(idString):")
         print("🎮 Current round: \(game.currentRound)")
         print("🎮 Dealer index: \(game.dealerIndex)")
         print("🎮 Is active: \(game.isActive)")
@@ -292,21 +308,46 @@ final class GameCoordinator: ObservableObject {
             guard let self = self else { throw GameCoordinatorError.transactionFailed }
             
             if let gameToComplete = try await self.verifyGame(id: gameID, in: context) {
-                // Update player statistics first
-                self.updatePlayerStats(for: gameToComplete)
+                print("🎮 Completing game: \(gameID)")
+                
+                // Calculate final scores and create snapshot first
+                let scores = calculateFinalScores(for: gameToComplete)
+                let sortedPlayers = scores.sorted { $0.value < $1.value }
+                
+                // Create game snapshot before updating any state
+                gameToComplete.createSnapshot()
+                
+                // Update player statistics
+                for (index, playerScore) in sortedPlayers.enumerated() {
+                    if let player = gameToComplete.playersArray.first(where: { $0.id.uuidString == playerScore.key }) {
+                        print("🎮 Updating stats for player: \(player.name)")
+                        player.gamesPlayed += 1
+                        if index == 0 {
+                            player.gamesWon += 1
+                        }
+                        player.totalScore += Int32(playerScore.value)
+                        
+                        let position = Double(index + 1)
+                        if player.gamesPlayed == 1 {
+                            player.averagePosition = position
+                        } else {
+                            let oldTotal = player.averagePosition * Double(player.gamesPlayed - 1)
+                            player.averagePosition = (oldTotal + position) / Double(player.gamesPlayed)
+                        }
+                    }
+                }
+                
+                // Save changes before marking game as inactive
+                try context.save()
                 
                 // Mark game as inactive and set end date
                 gameToComplete.isActive = false
                 gameToComplete.endDate = Date()
                 
-                // Save changes
+                // Final save
                 try context.save()
+                print("🎮 Game completed successfully")
                 
-                // Clear navigation state
-                await MainActor.run {
-                    self.shouldDismiss = true
-                    self.path.removeAll()
-                }
             } else {
                 throw GameCoordinatorError.gameNotFound
             }
@@ -327,34 +368,14 @@ final class GameCoordinator: ObservableObject {
                 throw AppError.invalidGameState("Game not found")
             }
             
-            // 2. Ensure all rounds up to the current round exist
-            let currentRoundNumber = game.currentRound
-            let existingRounds = game.roundsArray
+            print("🎮 Submitting scores for round \(game.currentRound)")
             
-            // Create any missing rounds between 1 and currentRound
-            for roundNumber in 1...currentRoundNumber {
-                if !existingRounds.contains(where: { $0.number == roundNumber }) {
-                    let newRound = Round(context: context)
-                    newRound.id = UUID()
-                    newRound.number = roundNumber
-                    newRound.dealerIndex = (game.dealerIndex + roundNumber - 1) % Int16(game.playersArray.count)
-                    newRound.isCompleted = false
-                    newRound.isSkipped = false
-                    newRound.scores = [:]
-                    newRound.game = game
-                    print("🎮 Created missing round \(roundNumber)")
-                }
+            // 2. Find or create the current round
+            guard let round = game.roundsArray.first(where: { $0.number == game.currentRound }) else {
+                throw AppError.invalidGameState("Current round not found")
             }
             
-            // Save to ensure all rounds are persisted
-            try context.save()
-            
-            // 3. Find the current round
-            guard let round = game.roundsArray.first(where: { $0.number == currentRoundNumber }) else {
-                throw AppError.invalidGameState("Current round not found after creation")
-            }
-            
-            // 4. Update the round with scores
+            // 3. Update the round with scores
             round.scores = scores
             round.isCompleted = true
             round.isSkipped = false
@@ -362,8 +383,13 @@ final class GameCoordinator: ObservableObject {
             // Save to ensure scores are persisted
             try context.save()
             
-            // 5. Update game state and create next round if needed
-            if currentRoundNumber < Int16(game.maxRounds) {
+            // 4. Check if this was the last round (12)
+            if game.currentRound == 12 {
+                print("🎮 Round 12 completed, checking game completion")
+                // Complete the game
+                try await completeGame(gameID)
+            } else if game.currentRound < Int16(game.maxRounds) {
+                // 5. If not the last round, advance to next round
                 game.currentRound += 1
                 game.dealerIndex = (game.dealerIndex + 1) % Int16(game.playersArray.count)
                 
@@ -378,18 +404,8 @@ final class GameCoordinator: ObservableObject {
                     nextRound.scores = [:]
                     nextRound.game = game
                 }
-            } else {
-                game.isActive = false
-            }
-            
-            // Final save to persist all changes
-            try context.save()
-            
-            // 6. Print verification info
-            print("📊 Verification after score submission:")
-            print("📊 Game rounds count: \(game.roundsArray.count)")
-            for r in game.roundsArray.sorted(by: { $0.number < $1.number }) {
-                print("📊 Round \(r.number): completed=\(r.isCompleted), scores=\(r.scores ?? [:])")
+                
+                try context.save()
             }
         }
     }
@@ -403,9 +419,9 @@ final class GameCoordinator: ObservableObject {
                 throw AppError.invalidGameState("Game not found")
             }
             
-            // Verify this is an optional round
+            // Verify this is an optional round (9-11)
             guard game.currentRound >= 9 && game.currentRound <= 11 else {
-                throw AppError.invalidGameState("Can only skip optional rounds")
+                throw AppError.invalidGameState("Can only skip optional rounds (9-11)")
             }
             
             // Find or create the current round
@@ -436,9 +452,8 @@ final class GameCoordinator: ObservableObject {
             game.currentRound += 1
             game.dealerIndex = (game.dealerIndex + 1) % Int16(game.playersArray.count)
             
-            // Create the next round if not the final round and doesn't exist
-            if game.currentRound <= Int16(game.maxRounds) && 
-               !game.roundsArray.contains(where: { $0.number == game.currentRound }) {
+            // Create the next round if it doesn't exist
+            if !game.roundsArray.contains(where: { $0.number == game.currentRound }) {
                 let nextRound = try Round.createRound(
                     number: game.currentRound,
                     dealerIndex: game.dealerIndex,
@@ -446,12 +461,79 @@ final class GameCoordinator: ObservableObject {
                 )
                 nextRound.game = game
                 game.addToRounds(nextRound)
-            } else {
-                // Mark game as inactive since we've completed all rounds
-                game.isActive = false
             }
             
             return ()
+        }
+    }
+    
+    /// Get a round by its ID
+    /// - Parameter id: The UUID of the round to retrieve
+    /// - Returns: The Round object if found, nil otherwise
+    func getRound(id roundID: UUID) async throws -> Round? {
+        let request = Round.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", roundID as CVarArg)
+        request.fetchLimit = 1
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            viewContext.perform {
+                do {
+                    let rounds = try request.execute()
+                    continuation.resume(returning: rounds.first)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Get the current round for a game
+    /// - Parameter gameID: The UUID of the game
+    /// - Returns: The current Round object if found, nil otherwise
+    func getCurrentRound(for gameID: UUID) async throws -> Round? {
+        do {
+            // Use the proper method to get the game
+            let fetchRequest: NSFetchRequest<Game> = Game.fetchRequest()
+            fetchRequest.predicate = NSPredicate(format: "id == %@", gameID as CVarArg)
+            fetchRequest.fetchLimit = 1
+            
+            let games = try viewContext.fetch(fetchRequest)
+            guard let game = games.first else {
+                throw GameCoordinatorError.gameNotFound
+            }
+            
+            // Get the current round based on the game's currentRound property
+            guard game.currentRound > 0 && game.currentRound <= Int16(game.roundsArray.count) else {
+                return nil
+            }
+            
+            return game.roundsArray[Int(game.currentRound) - 1]
+        } catch {
+            Logger.logError(error, category: Logger.game)
+            return nil
+        }
+    }
+    
+    /// Update the scores for a specific round
+    /// - Parameters:
+    ///   - roundID: The UUID of the round to update
+    ///   - scores: Dictionary mapping player IDs to scores
+    /// - Returns: The updated Round object if successful, nil otherwise
+    func updateRoundScores(roundID: UUID, scores: [String: Int32]) async throws -> Round? {
+        guard let round = try await getRound(id: roundID) else {
+            throw GameCoordinatorError.roundNotFound
+        }
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            viewContext.perform {
+                do {
+                    round.scores = scores
+                    try self.viewContext.save()
+                    continuation.resume(returning: round)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
     }
     

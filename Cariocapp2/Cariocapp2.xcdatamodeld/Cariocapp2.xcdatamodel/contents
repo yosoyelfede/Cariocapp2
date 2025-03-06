@@ -6,6 +6,7 @@
         <attribute name="endDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="isActive" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="playerSnapshots" optional="YES" attributeType="Transformable" valueTransformerName="PlayerSnapshotsValueTransformer"/>
         <attribute name="startDate" attributeType="Date" usesScalarValueType="NO"/>
         <relationship name="players" toMany="YES" minCount="2" maxCount="4" deletionRule="Nullify" destinationEntity="Player" inverseName="games" inverseEntity="Player"/>
         <relationship name="rounds" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="Round" inverseName="game" inverseEntity="Round"/>
