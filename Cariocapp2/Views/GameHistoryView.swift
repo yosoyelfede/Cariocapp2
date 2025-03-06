@@ -45,12 +45,14 @@ struct GameHistoryView: View {
                                 ForEach(completedGames) { game in
                                     GameHistoryCard(game: game)
                                         .onTapGesture {
-                                            // Show the detail view immediately and preload data
+                                            // Preload the game data first, then show the detail view
                                             selectedGame = game
-                                            showingDetailView = true
                                             
-                                            // Preload the game data in the background
+                                            // Ensure data is loaded before showing the detail view
                                             preloadGameData(game)
+                                            
+                                            // Now show the detail view with loaded data
+                                            showingDetailView = true
                                         }
                                         .contextMenu {
                                             Button(role: .destructive) {
@@ -125,7 +127,7 @@ struct GameHistoryView: View {
                         }
                 }
                 .presentationDetents([.large])
-                .presentationDragIndicator(.hidden)
+                .presentationDragIndicator(.visible)
                 .interactiveDismissDisabled(true)
             }
         }
@@ -216,26 +218,34 @@ struct GameHistoryView: View {
         }
     }
     
-    // Preload game data in the background
+    // Preload game data synchronously to ensure it's available when the detail view appears
     private func preloadGameData(_ game: Game) {
-        // Load all relationships in the background
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Force loading of all relationships
-            let _ = game.roundsArray
-            let _ = game.playersArray
-            
-            // Access player snapshots to ensure they're loaded
-            if let snapshots = game.playerSnapshots {
-                for case let snapshot as NSManagedObject in snapshots {
-                    let _ = snapshot.objectID
-                }
-            }
-            
-            // Access round scores to ensure they're loaded
-            for round in game.roundsArray {
-                let _ = round.scores
+        // Force loading of all relationships synchronously
+        let _ = game.roundsArray
+        let _ = game.playersArray
+        
+        // Access player snapshots to ensure they're loaded
+        if let snapshots = game.playerSnapshots {
+            for case let snapshot as NSManagedObject in snapshots {
+                let _ = snapshot.objectID
             }
         }
+        
+        // Access round scores to ensure they're loaded
+        for round in game.roundsArray {
+            let _ = round.scores
+            let _ = round.firstCardColor
+            
+            // Force loading of player relationships in scores
+            if let scores = round.scores as? Set<NSManagedObject> {
+                for case let score as NSManagedObject in scores {
+                    let _ = score.objectID
+                }
+            }
+        }
+        
+        // Force loading of card color stats
+        let _ = game.cardColorStats
     }
     
     private func updatePlayerStatistics(_ player: Player) async throws {
@@ -302,25 +312,62 @@ private struct GameHistoryCard: View {
 private struct GameDetailView: View {
     let game: Game
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var isDataLoaded = false
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Game summary card
-                summaryCard
-                
-                // Final standings card
-                standingsCard
-                
-                // Round details card
-                roundDetailsCard
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Game summary card
+                    summaryCard
+                    
+                    // Final standings card
+                    standingsCard
+                    
+                    // Round details card
+                    roundDetailsCard
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .opacity(isDataLoaded ? 1 : 0)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            
+            if !isDataLoaded {
+                ProgressView("Loading game details...")
+            }
         }
         .navigationTitle("Game Details")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemGroupedBackground))
+        .task {
+            // Ensure data is loaded when view appears
+            ensureDataIsLoaded()
+        }
+    }
+    
+    // Ensure all necessary data is loaded
+    private func ensureDataIsLoaded() {
+        // Force loading of all relationships if not already loaded
+        let _ = game.roundsArray
+        let _ = game.playersArray
+        let _ = game.playerSnapshotsArray
+        let _ = game.cardColorStats
+        
+        // Access round scores to ensure they're loaded
+        for round in game.roundsArray {
+            let _ = round.scores
+            let _ = round.firstCardColor
+            
+            // Force loading of player relationships in scores
+            if let scores = round.scores as? Set<NSManagedObject> {
+                for case let score as NSManagedObject in scores {
+                    let _ = score.objectID
+                }
+            }
+        }
+        
+        // Mark data as loaded
+        isDataLoaded = true
     }
     
     // MARK: - Summary Card
