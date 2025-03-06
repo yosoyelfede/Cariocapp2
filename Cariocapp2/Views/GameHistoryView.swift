@@ -237,16 +237,33 @@ struct GameHistoryView: View {
                 // Disable Core Data validation temporarily for this context
                 viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
                 
-                // Call cleanup to properly handle relationships
-                game.cleanup()
+                // Instead of using cleanup, we'll handle the deletion manually
+                // to avoid validation issues with the players relationship
                 
-                // Delete the game
+                // 1. Delete all rounds first
+                for round in game.roundsArray {
+                    round.scores = nil
+                    viewContext.delete(round)
+                }
+                
+                // 2. Clear snapshots
+                game.playerSnapshots = nil
+                
+                // 3. Remove the game from each player's games relationship
+                for player in playersToUpdate {
+                    if var playerGames = player.games as? Set<Game> {
+                        playerGames.remove(game)
+                        player.games = playerGames as NSSet
+                    }
+                }
+                
+                // 4. Delete the game directly
                 viewContext.delete(game)
                 
-                // Save changes
+                // 5. Save changes
                 try viewContext.save()
                 
-                // Update statistics for affected players
+                // 6. Update statistics for affected players
                 print("🗑️ Updating statistics for \(playersToUpdate.count) affected players")
                 for player in playersToUpdate {
                     if !player.isDeleted && player.managedObjectContext != nil {
@@ -254,12 +271,12 @@ struct GameHistoryView: View {
                     }
                 }
                 
-                // Save again after updating player statistics
+                // 7. Save again after updating player statistics
                 if viewContext.hasChanges {
                     try viewContext.save()
                 }
                 
-                // Refresh the list
+                // 8. Refresh the list
                 await loadCompletedGames()
                 
                 print("🗑️ Game deleted successfully")
