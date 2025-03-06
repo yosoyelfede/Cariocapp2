@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreData
+import os
 
 // MARK: - Game History View
 struct GameHistoryView: View {
@@ -12,6 +13,7 @@ struct GameHistoryView: View {
     @State private var isDeleteConfirmationPresented = false
     @State private var gameToDelete: Game?
     @State private var showingDetailView = false
+    @State private var dataIsPreloaded = false
     
     // Grid layout properties
     private let columns = [
@@ -19,62 +21,19 @@ struct GameHistoryView: View {
     ]
     
     var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
-            
-            VStack {
-                if isLoading && completedGames.isEmpty {
-                    ProgressView("Loading games...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if completedGames.isEmpty {
-                    ContentUnavailableView(
-                        "No Completed Games",
-                        systemImage: "gamecontroller",
-                        description: Text("Completed games will appear here.")
-                    )
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Tap a game to view details")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal)
-                            
-                            LazyVGrid(columns: columns, spacing: 16) {
-                                ForEach(completedGames) { game in
-                                    GameHistoryCard(game: game)
-                                        .onTapGesture {
-                                            // Preload the game data first, then show the detail view
-                                            selectedGame = game
-                                            
-                                            // Ensure data is loaded before showing the detail view
-                                            preloadGameData(game)
-                                            
-                                            // Now show the detail view with loaded data
-                                            showingDetailView = true
-                                        }
-                                        .contextMenu {
-                                            Button(role: .destructive) {
-                                                gameToDelete = game
-                                                isDeleteConfirmationPresented = true
-                                            } label: {
-                                                Label("Delete Game", systemImage: "trash")
-                                            }
-                                        }
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                        .padding(.vertical)
-                    }
-                    .refreshable {
-                        await loadCompletedGames()
-                    }
-                }
-            }
-        }
-        .navigationTitle("Game History")
+        GameHistoryContent(
+            isLoading: isLoading,
+            completedGames: completedGames,
+            selectedGame: $selectedGame,
+            showingDetailView: $showingDetailView,
+            dataIsPreloaded: $dataIsPreloaded,
+            error: $error,
+            isErrorAlertPresented: $isErrorAlertPresented,
+            preloadGameDataAsync: preloadGameDataAsync,
+            loadCompletedGames: loadCompletedGames,
+            gameToDelete: $gameToDelete,
+            isDeleteConfirmationPresented: $isDeleteConfirmationPresented
+        )
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
@@ -84,13 +43,6 @@ struct GameHistoryView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-            }
-        }
-        .alert("Error", isPresented: $isErrorAlertPresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if let error = error {
-                Text(error.localizedDescription)
             }
         }
         .confirmationDialog(
@@ -111,11 +63,13 @@ struct GameHistoryView: View {
         }
         .sheet(isPresented: $showingDetailView, onDismiss: {
             // Reset state when sheet is dismissed
+            Logger.logUIEvent("Detail view dismissed, resetting state")
             selectedGame = nil
+            dataIsPreloaded = false
         }) {
             if let selectedGame = selectedGame {
                 NavigationStack {
-                    GameDetailView(game: selectedGame)
+                    GameDetailView(game: selectedGame, dataIsPreloaded: dataIsPreloaded)
                         .toolbar {
                             ToolbarItem(placement: .navigationBarTrailing) {
                                 Button {
@@ -136,14 +90,129 @@ struct GameHistoryView: View {
         }
     }
     
+    // Extract the content into a separate view to reduce complexity
+    private struct GameHistoryContent: View {
+        let isLoading: Bool
+        let completedGames: [Game]
+        @Binding var selectedGame: Game?
+        @Binding var showingDetailView: Bool
+        @Binding var dataIsPreloaded: Bool
+        @Binding var error: Error?
+        @Binding var isErrorAlertPresented: Bool
+        let preloadGameDataAsync: (Game) async -> Void
+        var loadCompletedGames: () async -> Void
+        var gameToDelete: Binding<Game?>
+        var isDeleteConfirmationPresented: Binding<Bool>
+        
+        var body: some View {
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
+                
+                VStack {
+                    if isLoading && completedGames.isEmpty {
+                        ProgressView("Loading games...")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if completedGames.isEmpty {
+                        ContentUnavailableView(
+                            "No Completed Games",
+                            systemImage: "gamecontroller",
+                            description: Text("Completed games will appear here.")
+                        )
+                    } else {
+                        GameHistoryList(
+                            completedGames: completedGames,
+                            selectedGame: $selectedGame,
+                            showingDetailView: $showingDetailView,
+                            dataIsPreloaded: $dataIsPreloaded,
+                            preloadGameDataAsync: preloadGameDataAsync,
+                            loadCompletedGames: loadCompletedGames,
+                            gameToDelete: gameToDelete,
+                            isDeleteConfirmationPresented: isDeleteConfirmationPresented
+                        )
+                    }
+                }
+                .navigationTitle("Game History")
+                .alert(isPresented: $isErrorAlertPresented) {
+                    Alert(
+                        title: Text("Error"),
+                        message: Text(error?.localizedDescription ?? "An unknown error occurred"),
+                        dismissButton: .default(Text("OK"))
+                    )
+                }
+            }
+        }
+    }
+    
+    // Extract the game list into a separate view
+    private struct GameHistoryList: View {
+        let completedGames: [Game]
+        @Binding var selectedGame: Game?
+        @Binding var showingDetailView: Bool
+        @Binding var dataIsPreloaded: Bool
+        let preloadGameDataAsync: (Game) async -> Void
+        var loadCompletedGames: () async -> Void
+        var gameToDelete: Binding<Game?>
+        var isDeleteConfirmationPresented: Binding<Bool>
+        
+        private let columns: [GridItem] = [
+            GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
+        ]
+        
+        var body: some View {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Completed Games")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(completedGames) { game in
+                            GameHistoryCard(game: game)
+                                .onTapGesture {
+                                    Logger.logUIEvent("Game card tapped: \(game.id.uuidString)")
+                                    selectedGame = game
+                                    dataIsPreloaded = false
+                                    showingDetailView = true
+                                    
+                                    // Preload data asynchronously
+                                    Task {
+                                        await preloadGameDataAsync(game)
+                                        dataIsPreloaded = true
+                                        Logger.logUIEvent("Data preloading completed for game: \(game.id.uuidString)")
+                                    }
+                                }
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        gameToDelete.wrappedValue = game
+                                        isDeleteConfirmationPresented.wrappedValue = true
+                                    } label: {
+                                        Label("Delete Game", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.vertical)
+            }
+            .refreshable {
+                await loadCompletedGames()
+            }
+        }
+    }
+    
     // MARK: - Data Loading
     private func loadCompletedGames() async {
+        Logger.logUIEvent("Loading completed games")
         isLoading = true
         defer { isLoading = false }
         
         do {
             try await fetchCompletedGames()
+            Logger.logUIEvent("Successfully loaded \(completedGames.count) completed games")
         } catch {
+            Logger.logError(error, category: Logger.ui)
             self.error = error
             isErrorAlertPresented = true
         }
@@ -218,34 +287,53 @@ struct GameHistoryView: View {
         }
     }
     
-    // Preload game data synchronously to ensure it's available when the detail view appears
-    private func preloadGameData(_ game: Game) {
-        // Force loading of all relationships synchronously
-        let _ = game.roundsArray
-        let _ = game.playersArray
+    // Preload game data asynchronously
+    private func preloadGameDataAsync(_ game: Game) async {
+        Logger.logUIEvent("Starting async preload for game: \(game.id.uuidString)")
         
-        // Access player snapshots to ensure they're loaded
-        if let snapshots = game.playerSnapshots {
-            for case let snapshot as NSManagedObject in snapshots {
-                let _ = snapshot.objectID
-            }
-        }
-        
-        // Access round scores to ensure they're loaded
-        for round in game.roundsArray {
-            let _ = round.scores
-            let _ = round.firstCardColor
+        // Perform on a background thread to avoid UI blocking
+        await Task.detached(priority: .userInitiated) {
+            // Force loading of all relationships
+            Logger.logUIEvent("Loading rounds array")
+            let rounds = game.roundsArray
+            Logger.logUIEvent("Loaded \(rounds.count) rounds")
             
-            // Force loading of player relationships in scores
-            if let scores = round.scores as? Set<NSManagedObject> {
-                for case let score as NSManagedObject in scores {
-                    let _ = score.objectID
+            Logger.logUIEvent("Loading players array")
+            let players = game.playersArray
+            Logger.logUIEvent("Loaded \(players.count) players")
+            
+            // Access player snapshots to ensure they're loaded
+            Logger.logUIEvent("Loading player snapshots")
+            if let snapshots = game.playerSnapshots {
+                var count = 0
+                for case let snapshot as NSManagedObject in snapshots {
+                    let _ = snapshot.objectID
+                    count += 1
+                }
+                Logger.logUIEvent("Loaded \(count) player snapshots")
+            }
+            
+            // Access round scores to ensure they're loaded
+            Logger.logUIEvent("Loading round scores")
+            for round in rounds {
+                let _ = round.scores
+                let _ = round.firstCardColor
+                
+                // Force loading of player relationships in scores
+                if let scores = round.scores as? Set<NSManagedObject> {
+                    for case let score as NSManagedObject in scores {
+                        let _ = score.objectID
+                    }
                 }
             }
-        }
-        
-        // Force loading of card color stats
-        let _ = game.cardColorStats
+            
+            // Force loading of card color stats
+            Logger.logUIEvent("Loading card color stats")
+            let colorStats = game.cardColorStats
+            Logger.logUIEvent("Card color stats - Red: \(colorStats.redPercentage)%, Black: \(colorStats.blackPercentage)%")
+            
+            Logger.logUIEvent("Preloading completed for game: \(game.id.uuidString)")
+        }.value
     }
     
     private func updatePlayerStatistics(_ player: Player) async throws {
@@ -311,6 +399,7 @@ private struct GameHistoryCard: View {
 // MARK: - Game Detail View
 private struct GameDetailView: View {
     let game: Game
+    let dataIsPreloaded: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var isDataLoaded = false
     
@@ -339,22 +428,46 @@ private struct GameDetailView: View {
         .navigationTitle("Game Details")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemGroupedBackground))
-        .task {
-            // Ensure data is loaded when view appears
-            ensureDataIsLoaded()
+        .onAppear {
+            Logger.logUIEvent("GameDetailView appeared for game: \(game.id.uuidString), dataIsPreloaded: \(dataIsPreloaded)")
+            if dataIsPreloaded {
+                // If data is already preloaded, just mark as loaded
+                Logger.logUIEvent("Data was preloaded, marking as loaded")
+                isDataLoaded = true
+            } else {
+                // Otherwise load it now
+                Logger.logUIEvent("Data was not preloaded, loading now")
+                Task {
+                    await loadGameData()
+                }
+            }
         }
     }
     
-    // Ensure all necessary data is loaded
-    private func ensureDataIsLoaded() {
+    // Load game data asynchronously
+    private func loadGameData() async {
+        Logger.logUIEvent("Starting to load game data for game: \(game.id.uuidString)")
+        
         // Force loading of all relationships if not already loaded
-        let _ = game.roundsArray
-        let _ = game.playersArray
-        let _ = game.playerSnapshotsArray
-        let _ = game.cardColorStats
+        Logger.logUIEvent("Loading rounds array")
+        let rounds = game.roundsArray
+        Logger.logUIEvent("Loaded \(rounds.count) rounds")
+        
+        Logger.logUIEvent("Loading players array")
+        let players = game.playersArray
+        Logger.logUIEvent("Loaded \(players.count) players")
+        
+        Logger.logUIEvent("Loading player snapshots")
+        let snapshots = game.playerSnapshotsArray
+        Logger.logUIEvent("Loaded \(snapshots.count) player snapshots")
+        
+        Logger.logUIEvent("Loading card color stats")
+        let colorStats = game.cardColorStats
+        Logger.logUIEvent("Card color stats - Red: \(colorStats.redPercentage)%, Black: \(colorStats.blackPercentage)%")
         
         // Access round scores to ensure they're loaded
-        for round in game.roundsArray {
+        Logger.logUIEvent("Loading round scores")
+        for round in rounds {
             let _ = round.scores
             let _ = round.firstCardColor
             
@@ -366,8 +479,11 @@ private struct GameDetailView: View {
             }
         }
         
-        // Mark data as loaded
-        isDataLoaded = true
+        // Mark data as loaded on the main thread
+        await MainActor.run {
+            Logger.logUIEvent("Data loading completed, updating UI")
+            isDataLoaded = true
+        }
     }
     
     // MARK: - Summary Card
