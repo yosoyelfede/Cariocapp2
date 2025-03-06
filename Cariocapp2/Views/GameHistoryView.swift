@@ -170,10 +170,7 @@ struct GameHistoryView: View {
                         ForEach(completedGames) { game in
                             GameHistoryCard(game: game)
                                 .onTapGesture {
-                                    // Prepare the game data synchronously before showing the detail view
-                                    prepareGameDataSynchronously(game)
-                                    
-                                    // Set the selected game and show the detail view
+                                    // Set the selected game and show the detail view immediately
                                     selectedGame = game
                                     dataIsPreloaded = true
                                     showingDetailView = true
@@ -194,23 +191,6 @@ struct GameHistoryView: View {
             }
             .refreshable {
                 await loadCompletedGames()
-            }
-        }
-        
-        // Prepare game data synchronously before showing the detail view
-        private func prepareGameDataSynchronously(_ game: Game) {
-            // Force immediate loading of critical data
-            _ = game.playersArray
-            _ = game.roundsArray
-            
-            // Force loading of player snapshots
-            _ = game.playerSnapshotsArray
-            
-            // Force loading of rounds and scores
-            for round in game.roundsArray {
-                _ = round.name
-                _ = round.firstCardColor
-                _ = round.scores
             }
         }
     }
@@ -384,6 +364,14 @@ private struct GameDetailView: View {
     let game: Game
     let dataIsPreloaded: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var viewModel: GameDetailViewModel
+    
+    init(game: Game, dataIsPreloaded: Bool) {
+        self.game = game
+        self.dataIsPreloaded = dataIsPreloaded
+        // Initialize the view model with the game data
+        _viewModel = State(initialValue: GameDetailViewModel(game: game))
+    }
     
     var body: some View {
         ScrollView {
@@ -404,25 +392,8 @@ private struct GameDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemGroupedBackground))
         .onAppear {
-            // Force immediate loading of critical data
-            forceSynchronousDataLoading()
-        }
-    }
-    
-    // Force synchronous loading of critical data
-    private func forceSynchronousDataLoading() {
-        // Access key properties to force Core Data to load them
-        _ = game.playersArray
-        _ = game.roundsArray
-        
-        // Force loading of player snapshots
-        _ = game.playerSnapshotsArray
-        
-        // Force loading of rounds and scores
-        for round in game.roundsArray {
-            _ = round.name
-            _ = round.firstCardColor
-            _ = round.scores
+            // Ensure the view model has loaded all data
+            viewModel.loadAllData()
         }
     }
     
@@ -442,7 +413,7 @@ private struct GameDetailView: View {
                 
                 Spacer()
                 
-                Text(game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown")
+                Text(viewModel.formattedEndDate)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -461,7 +432,7 @@ private struct GameDetailView: View {
                             .foregroundColor(.blue)
                     }
                     
-                    Text(game.playersArray.map { $0.name }.joined(separator: ", "))
+                    Text(viewModel.playerNames)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -479,7 +450,7 @@ private struct GameDetailView: View {
                             .foregroundColor(.blue)
                     }
                     
-                    Text("\(game.roundsArray.filter { $0.isCompleted && !$0.isSkipped }.count)")
+                    Text("\(viewModel.completedRoundsCount)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -487,7 +458,6 @@ private struct GameDetailView: View {
                 Spacer(minLength: 8)
                 
                 // Card color statistics
-                let colorStats = game.cardColorStats
                 HStack(spacing: 8) {
                     // Red cards
                     VStack(alignment: .center, spacing: 2) {
@@ -499,7 +469,7 @@ private struct GameDetailView: View {
                                 .foregroundColor(.red)
                         }
                         
-                        Text(String(format: "%.0f%%", colorStats.redPercentage))
+                        Text(viewModel.redPercentage)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -514,7 +484,7 @@ private struct GameDetailView: View {
                                 .foregroundColor(.black)
                         }
                         
-                        Text(String(format: "%.0f%%", colorStats.blackPercentage))
+                        Text(viewModel.blackPercentage)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -543,12 +513,11 @@ private struct GameDetailView: View {
             Divider()
             
             // Player standings in a grid layout
-            let snapshots = game.playerSnapshotsArray.sorted { $0.position < $1.position }
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 8),
                 GridItem(.flexible(), spacing: 8)
             ], spacing: 8) {
-                ForEach(snapshots, id: \.id) { snapshot in
+                ForEach(viewModel.playerSnapshots) { snapshot in
                     HStack(spacing: 4) {
                         // Position
                         ZStack {
@@ -600,13 +569,12 @@ private struct GameDetailView: View {
             Divider()
             
             // Round list in a compact grid layout
-            let playedRounds = game.sortedRounds.filter { $0.isCompleted && !$0.isSkipped }
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 8),
                 GridItem(.flexible(), spacing: 8)
             ], spacing: 8) {
-                ForEach(playedRounds, id: \.id) { round in
-                    CompactRoundDetailView(round: round)
+                ForEach(viewModel.playedRounds) { roundData in
+                    CompactRoundDetailView(roundData: roundData)
                 }
             }
         }
@@ -627,9 +595,93 @@ private struct GameDetailView: View {
     }
 }
 
+// MARK: - Game Detail View Model
+private class GameDetailViewModel: ObservableObject {
+    // Game summary data
+    let formattedEndDate: String
+    let playerNames: String
+    let completedRoundsCount: Int
+    let redPercentage: String
+    let blackPercentage: String
+    
+    // Player standings data
+    struct PlayerSnapshotData: Identifiable {
+        let id: UUID
+        let name: String
+        let position: Int
+        let score: Int
+    }
+    let playerSnapshots: [PlayerSnapshotData]
+    
+    // Round details data
+    struct RoundData: Identifiable {
+        let id: UUID
+        let name: String
+        let firstCardColor: String?
+        let topScorePlayerName: String?
+        let topScore: Int?
+        let scores: [ScoreData]
+        
+        struct ScoreData: Identifiable {
+            let id: UUID
+            let playerName: String
+            let score: Int
+        }
+    }
+    let playedRounds: [RoundData]
+    
+    // Initialize with a game
+    init(game: Game) {
+        // Initialize with default values
+        self.formattedEndDate = game.endDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown"
+        self.playerNames = game.playersArray.map { $0.name }.joined(separator: ", ")
+        self.completedRoundsCount = game.roundsArray.filter { $0.isCompleted && !$0.isSkipped }.count
+        
+        let colorStats = game.cardColorStats
+        self.redPercentage = String(format: "%.0f%%", colorStats.redPercentage)
+        self.blackPercentage = String(format: "%.0f%%", colorStats.blackPercentage)
+        
+        // Extract player snapshots
+        self.playerSnapshots = game.playerSnapshotsArray.sorted { $0.position < $1.position }.map { snapshot in
+            PlayerSnapshotData(
+                id: snapshot.id,
+                name: snapshot.name,
+                position: snapshot.position,
+                score: snapshot.score
+            )
+        }
+        
+        // Extract round data
+        self.playedRounds = game.sortedRounds.filter { $0.isCompleted && !$0.isSkipped }.map { round in
+            let scores = round.sortedScores.map { score in
+                RoundData.ScoreData(
+                    id: score.player.id,
+                    playerName: score.player.name,
+                    score: Int(score.score)
+                )
+            }
+            
+            return RoundData(
+                id: round.id,
+                name: round.name,
+                firstCardColor: round.firstCardColor,
+                topScorePlayerName: round.sortedScores.first?.player.name,
+                topScore: round.sortedScores.first != nil ? Int(round.sortedScores.first!.score) : nil,
+                scores: scores
+            )
+        }
+    }
+    
+    // Force loading of all data
+    func loadAllData() {
+        // This method is called to ensure all data is loaded
+        // The data is already loaded in the initializer, so this is just a placeholder
+    }
+}
+
 // MARK: - Compact Round Detail View
 private struct CompactRoundDetailView: View {
-    let round: Round
+    let roundData: GameDetailViewModel.RoundData
     @State private var showDetails = false
     
     var body: some View {
@@ -638,29 +690,29 @@ private struct CompactRoundDetailView: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(round.name)
+                    Text(roundData.name)
                         .font(.subheadline)
                         .fontWeight(.medium)
                     
                     Spacer()
                     
-                    if let firstCardColor = round.firstCardColor {
+                    if let firstCardColor = roundData.firstCardColor {
                         Circle()
                             .fill(firstCardColor == "red" ? Color.red : Color.black)
                             .frame(width: 10, height: 10)
                     }
                 }
                 
-                if let topScore = round.sortedScores.first {
+                if let playerName = roundData.topScorePlayerName, let score = roundData.topScore {
                     HStack {
-                        Text(topScore.player.name)
+                        Text(playerName)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                         
                         Spacer()
                         
-                        Text("\(topScore.score)")
+                        Text("\(score)")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -672,7 +724,7 @@ private struct CompactRoundDetailView: View {
         }
         .buttonStyle(PlainButtonStyle())
         .popover(isPresented: $showDetails) {
-            RoundDetailPopover(round: round)
+            RoundDetailPopover(roundData: roundData)
                 .presentationCompactAdaptation(.popover)
         }
     }
@@ -680,17 +732,17 @@ private struct CompactRoundDetailView: View {
 
 // MARK: - Round Detail Popover
 private struct RoundDetailPopover: View {
-    let round: Round
+    let roundData: GameDetailViewModel.RoundData
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(round.name)
+                Text(roundData.name)
                     .font(.headline)
                 
                 Spacer()
                 
-                if let firstCardColor = round.firstCardColor {
+                if let firstCardColor = roundData.firstCardColor {
                     Label(
                         firstCardColor.capitalized,
                         systemImage: firstCardColor == "red" ? "suit.diamond" : "suit.spade"
@@ -703,14 +755,14 @@ private struct RoundDetailPopover: View {
             
             Divider()
             
-            ForEach(round.sortedScores, id: \.player.id) { scoreEntry in
+            ForEach(roundData.scores) { scoreData in
                 HStack {
-                    Text(scoreEntry.player.name)
+                    Text(scoreData.playerName)
                         .font(.subheadline)
                     
                     Spacer()
                     
-                    Text("\(scoreEntry.score)")
+                    Text("\(scoreData.score)")
                         .font(.subheadline)
                         .fontWeight(.medium)
                 }
