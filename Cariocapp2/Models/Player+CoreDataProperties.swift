@@ -136,19 +136,46 @@ extension Player {
     public func updateStatistics() {
         guard let allGames = games?.allObjects as? [Game] else { return }
         
-        // Filter to only include completed games
+        // Filter to only include completed games and ensure uniqueness by ID
         let completedGames = allGames.filter { !$0.isActive && $0.endDate != nil }
-        print("🔢 Updating statistics for player \(name) - \(completedGames.count) completed games")
+        let uniqueGameIDs = Set(completedGames.map { $0.id })
+        let uniqueCompletedGames = completedGames.filter { uniqueGameIDs.contains($0.id) }
+        
+        print("🔢 Updating statistics for player \(name) - \(uniqueCompletedGames.count) completed games")
+        
+        // Reset statistics before recalculating
+        gamesPlayed = 0
+        gamesWon = 0
+        totalScore = 0
+        averagePosition = 0
+        
+        // No games played? Just return
+        if uniqueCompletedGames.isEmpty {
+            print("🔢 No completed games for player \(name)")
+            return
+        }
         
         // Update games played
-        gamesPlayed = Int32(completedGames.count)
+        gamesPlayed = Int32(uniqueCompletedGames.count)
         
         // Update games won
         var wonGames = 0
         var totalPosition = 0
         var totalGameScore: Int32 = 0
         
-        for game in completedGames {
+        // Track processed game IDs to avoid duplicates
+        var processedGameIDs = Set<UUID>()
+        
+        for game in uniqueCompletedGames {
+            // Skip if we've already processed this game
+            if processedGameIDs.contains(game.id) {
+                print("🔢 Skipping duplicate game: \(game.id)")
+                continue
+            }
+            
+            // Mark this game as processed
+            processedGameIDs.insert(game.id)
+            
             // Check if this player won the game
             let snapshots = game.playerSnapshotsArray.sorted(by: { $0.position < $1.position })
             if !snapshots.isEmpty && snapshots.first?.id == self.id {
@@ -181,8 +208,8 @@ extension Player {
         gamesWon = Int32(wonGames)
         
         // Update average position
-        if completedGames.count > 0 {
-            averagePosition = Double(totalPosition) / Double(completedGames.count)
+        if uniqueCompletedGames.count > 0 {
+            averagePosition = Double(totalPosition) / Double(uniqueCompletedGames.count)
         } else {
             averagePosition = 0
         }

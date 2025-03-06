@@ -212,11 +212,17 @@ extension Game {
             throw AppError.invalidGameState("Cannot complete game - not all rounds are finished")
         }
         
-        isActive = false
-        
-        // Update player statistics
-        for player in playersArray {
-            player.updateStatistics()
+        // Only update if the game is currently active
+        if isActive {
+            isActive = false
+            endDate = Date()
+            
+            // Create snapshot if needed
+            if playerSnapshotsArray.isEmpty {
+                createSnapshot()
+            }
+            
+            print("🎮 Game \(id) completed")
         }
     }
     
