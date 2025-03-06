@@ -153,4 +153,83 @@ The app follows Apple's recommended best practices:
 
 ## License
 
-Copyright © 2025 Federico Antunovic. All rights reserved. 
+Copyright © 2025 Federico Antunovic. All rights reserved.
+
+## Code Analysis
+
+### Architecture Overview
+
+Cariocapp2 follows the MVVM (Model-View-ViewModel) architecture with Coordinators for navigation flow:
+
+#### Key Components
+
+- **Models**: Core Data entities for Game, Player, and Round
+- **Views**: SwiftUI views for different screens and components
+- **ViewModels**: Business logic and state management
+- **Coordinators**: Navigation and flow control
+- **Repositories**: Data access layer
+- **Managers**: Specialized functionality (Resources, Security, etc.)
+- **Helpers**: Utility functions and extensions
+
+### Data Model
+
+The app uses Core Data for persistence with the following main entities:
+
+1. **Game**
+   - Represents a game session with players, rounds, and game state
+   - Tracks active status, dealer position, and current round
+   - Manages relationships with players and rounds
+   - Provides game completion logic and statistics
+
+2. **Player**
+   - Represents a player with statistics and game history
+   - Tracks games played, games won, and average position
+   - Supports both registered and guest players
+   - Provides validation and state management
+
+3. **Round**
+   - Represents a round in a game with scores and rules
+   - Tracks completion status, dealer position, and player scores
+   - Supports optional rounds that can be skipped
+   - Manages first card color tracking
+
+4. **RoundRule**
+   - Defines the rules for each round of Carioca
+   - Specifies required and optional rounds
+   - Provides descriptions and minimum card requirements
+
+### Core Features
+
+- **Player Management**: Create, edit, and delete players
+- **Game Creation**: Start new games with 2-4 players
+- **Score Tracking**: Enter and track scores for each round
+- **Game Flow**: Navigate through rounds with dealer rotation
+- **Statistics**: Track player performance across games
+- **State Management**: Persist and restore application state
+
+### Technical Implementation
+
+- **Core Data**: Used for data persistence with proper relationship management
+- **MVVM Architecture**: Clear separation of concerns with ViewModels handling business logic
+- **Dependency Injection**: Centralized container for managing dependencies
+- **Navigation System**: Coordinator pattern for managing navigation flow
+- **Error Handling**: Comprehensive error handling throughout the app
+- **State Management**: Robust state management with history and restoration
+- **Concurrency**: Proper use of async/await and background processing
+
+### UI Flow
+
+1. **Main Menu** → New Game/Players/Rules/Statistics/Game History
+2. **New Game** → Player Selection → Game View
+3. **Game View** → Score Entry → Next Round/Game Completion
+4. **Game Completion** → Game Summary → Main Menu
+
+### Best Practices Implemented
+
+- **SwiftUI**: Modern declarative UI with proper state management
+- **Concurrency**: Async/await for asynchronous operations
+- **Accessibility**: Support for VoiceOver and Dynamic Type
+- **Error Handling**: Comprehensive error handling and recovery
+- **Memory Management**: Efficient resource usage with cleanup
+- **Data Validation**: Thorough validation at all levels
+- **Separation of Concerns**: Clear boundaries between components 

@@ -19,57 +19,83 @@ struct GameMenuView: View {
     
     // MARK: - View Body
     var body: some View {
-        List {
-            Section {
+        VStack(spacing: 16) {
+            // Game Actions Section
+            VStack(alignment: .leading, spacing: 12) {
                 if let game = navigationCoordinator.getGame(id: gameID), game.isActive && !game.isComplete {
-                    Button(action: { navigationCoordinator.dismissSheet() }) {
-                        Label("Resume Game", systemImage: "play.circle")
-                    }
+                    Text("Game Actions")
+                        .font(.headline)
+                        .padding(.bottom, 4)
                     
-                    Button {
-                        showingScoreEdit = true
-                    } label: {
-                        Label("Edit Scores", systemImage: "pencil.circle")
+                    HStack(spacing: 16) {
+                        MenuButton(
+                            title: "Resume",
+                            icon: "play.circle",
+                            action: { navigationCoordinator.dismissSheet() }
+                        )
+                        
+                        MenuButton(
+                            title: "Edit Scores",
+                            icon: "pencil.circle",
+                            action: { showingScoreEdit = true }
+                        )
+                        
+                        MenuButton(
+                            title: "Rules",
+                            icon: "book",
+                            action: {
+                                navigationCoordinator.dismissSheet()
+                                navigationCoordinator.path.append(.rules)
+                            }
+                        )
                     }
-                    
-                    Button {
-                        navigationCoordinator.dismissSheet()
-                        navigationCoordinator.path.append(.rules)
-                    } label: {
-                        Label("Rules", systemImage: "book")
-                    }
+                    .padding(.horizontal, 4)
                 }
             }
+            .padding()
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
             
-            Section("Game Info") {
+            // Game Info Section
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Game Info")
+                    .font(.headline)
+                    .padding(.bottom, 4)
+                
                 if let game = navigationCoordinator.getGame(id: gameID) {
-                    LabeledContent("Started") {
-                        Text(game.startDate, style: .date)
-                            .foregroundColor(.secondary)
-                    }
+                    InfoRow(label: "Started", value: game.startDate.formatted(date: .abbreviated, time: .shortened))
                     
-                    LabeledContent("Current Round") {
-                        Text(getRoundDescription(game.currentRound))
-                            .foregroundColor(.secondary)
-                    }
+                    InfoRow(label: "Current Round", value: getRoundDescription(game.currentRound))
                     
-                    LabeledContent("Players") {
-                        Text(game.playersArray.map { $0.name }.joined(separator: ", "))
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    InfoRow(label: "Players", value: game.playersArray.map { $0.name }.joined(separator: ", "))
                 }
             }
+            .padding()
+            .background(Color(.secondarySystemGroupedBackground))
+            .cornerRadius(12)
             
-            Section {
-                Button(role: .destructive, action: {
+            // Leave Game Section
+            VStack {
+                Button(action: {
                     showingLeaveConfirmation = true
                 }) {
-                    Label("Leave Game", systemImage: "xmark.circle")
+                    HStack {
+                        Image(systemName: "xmark.circle")
+                            .foregroundColor(.red)
+                        Text("Leave Game")
+                            .foregroundColor(.red)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
                 }
                 .disabled(isLeaving)
             }
+            
+            Spacer()
         }
+        .padding()
         .navigationTitle("Game Menu")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Leave Game", isPresented: $showingLeaveConfirmation) {
@@ -95,6 +121,47 @@ struct GameMenuView: View {
                let currentRound = game.roundsArray.first(where: { $0.number == game.currentRound }) {
                 ScoreEditView(gameID: gameID, roundID: currentRound.id)
                     .environmentObject(navigationCoordinator)
+            }
+        }
+    }
+    
+    // Helper component for menu buttons
+    private struct MenuButton: View {
+        let title: String
+        let icon: String
+        let action: () -> Void
+        
+        var body: some View {
+            Button(action: action) {
+                VStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.title2)
+                    Text(title)
+                        .font(.caption)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color(.tertiarySystemGroupedBackground))
+                .cornerRadius(8)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
+    
+    // Helper component for info rows
+    private struct InfoRow: View {
+        let label: String
+        let value: String
+        
+        var body: some View {
+            HStack {
+                Text(label)
+                    .font(.subheadline)
+                Spacer()
+                Text(value)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.trailing)
             }
         }
     }

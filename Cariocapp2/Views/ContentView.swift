@@ -35,22 +35,29 @@ struct ContentView: View {
                     }
                 }
         }
-        .sheet(item: $coordinator.presentedSheet) { (sheet: AppSheet) in
+        .sheet(item: $coordinator.presentedSheet) { sheet in
             NavigationStack {
-                switch sheet {
-                case .scoreEntry(let gameID):
-                    ScoreEntryView(gameID: gameID)
-                        .transition(.move(edge: .bottom))
-                case .gameMenu(let gameID):
-                    GameMenuView(gameID: gameID)
-                        .transition(.move(edge: .bottom))
-                case .gameCompletion(let gameID):
-                    GameCompletionView(gameID: gameID)
-                        .transition(.opacity)
+                ZStack {
+                    Color(.systemGroupedBackground)
+                        .ignoresSafeArea()
+                    
+                    switch sheet {
+                    case .scoreEntry(let gameID):
+                        ScoreEntryView(gameID: gameID)
+                            .environmentObject(coordinator)
+                    case .gameMenu(let gameID):
+                        GameMenuView(gameID: gameID)
+                            .environmentObject(coordinator)
+                    case .gameCompletion(let gameID):
+                        GameCompletionView(gameID: gameID)
+                            .environmentObject(coordinator)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            .presentationDetents([.height(500)])
+            .presentationDragIndicator(.hidden)
+            .interactiveDismissDisabled(true)
         }
         .environmentObject(coordinator)
         .onAppear {

@@ -150,7 +150,7 @@ struct PlayerManagementView: View {
                 refreshPlayers(forceCleanup: true)
             }
         }
-        .onChange(of: repository.context.hasChanges) { _, hasChanges in
+        .onChange(of: repository.context.hasChanges) { hasChanges in
             if hasChanges {
                 // Only refresh the list, don't trigger statistics updates
                 refreshPlayers(forceCleanup: false)

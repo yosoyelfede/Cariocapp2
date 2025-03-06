@@ -30,38 +30,54 @@ struct ScoreEntryView: View {
     var body: some View {
         NavigationStack {
             if let game = viewModel.game {
-                Form {
-                    Section {
+                VStack(spacing: 16) {
+                    // Header
+                    Text("Enter scores for \(game.currentRoundDescription)")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                    
+                    // Player scores
+                    VStack(spacing: 0) {
                         ForEach(game.playersArray) { player in
-                            ScoreEntryRow(
+                            CompactScoreEntryRow(
                                 player: player,
                                 score: binding(for: player),
                                 onIncrement: { incrementScore(for: player) },
                                 onDecrement: { decrementScore(for: player) }
                             )
-                        }
-                    } header: {
-                        Text("Enter scores for \(game.currentRoundDescription)")
-                    } footer: {
-                        // Validation status
-                        HStack {
-                            if !isScoreValid {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Exactly one player must have a score of 0")
-                                    .font(.footnote)
-                                    .foregroundColor(.orange)
-                            } else {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                Text("Scores are valid")
-                                    .font(.footnote)
-                                    .foregroundColor(.green)
+                            
+                            if player != game.playersArray.last {
+                                Divider()
+                                    .padding(.leading, 50)
                             }
                         }
-                        .padding(.top, 8)
                     }
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    
+                    // Validation status
+                    HStack {
+                        if !isScoreValid {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("Exactly one player must have a score of 0")
+                                .font(.footnote)
+                                .foregroundColor(.orange)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Scores are valid")
+                                .font(.footnote)
+                                .foregroundColor(.green)
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    Spacer()
                 }
+                .padding(.top)
                 .navigationTitle("Enter Scores")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -109,7 +125,7 @@ struct ScoreEntryView: View {
                 showError("Error loading game: \(error.localizedDescription)")
             }
         }
-        .onChange(of: scores) { _, _ in
+        .onChange(of: scores) { newScores in
             validateScores()
         }
     }
@@ -205,58 +221,58 @@ struct ScoreEntryView: View {
         scores.removeAll()
         isConfirmationPresented = false
     }
-}
-
-// MARK: - Supporting Views
-private struct ScoreEntryRow: View {
-    let player: Player
-    let score: Binding<Int32>
-    let onIncrement: () -> Void
-    let onDecrement: () -> Void
     
-    var body: some View {
-        HStack {
-            Text(player.name)
-                .font(.headline)
-            
-            Spacer()
-            
-            HStack(spacing: 0) {
-                // Decrement button with improved tap handling
-                Button(action: onDecrement) {
-                    Image(systemName: "minus")
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(BorderlessButtonStyle()) // This is crucial for allowing multiple taps
-                .disabled(score.wrappedValue <= 0)
+    // MARK: - Compact Score Entry Row
+    private struct CompactScoreEntryRow: View {
+        let player: Player
+        @Binding var score: Int32
+        let onIncrement: () -> Void
+        let onDecrement: () -> Void
+        
+        var body: some View {
+            HStack {
+                // Player name
+                Text(player.name)
+                    .font(.body)
                 
-                TextField("Score", value: score, format: .number)
-                    .keyboardType(.numberPad)
-                    .multilineTextAlignment(.center)
-                    .frame(width: 60)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(.tertiarySystemFill))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(score.wrappedValue == 0 ? Color.green : Color.clear, lineWidth: 2)
-                    )
+                Spacer()
                 
-                // Increment button with improved tap handling
-                Button(action: onIncrement) {
-                    Image(systemName: "plus")
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+                // Score controls
+                HStack(spacing: 0) {
+                    // Decrement button
+                    Button(action: onDecrement) {
+                        Image(systemName: "minus")
+                            .padding(8)
+                    }
+                    .disabled(score == 0)
+                    
+                    // Score display
+                    Text("\(score)")
+                        .font(.body)
+                        .frame(width: 60)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(.tertiarySystemFill))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(score == 0 ? Color.green : Color.clear, lineWidth: 2)
+                        )
+                    
+                    // Increment button
+                    Button(action: onIncrement) {
+                        Image(systemName: "plus")
+                            .padding(8)
+                    }
                 }
-                .buttonStyle(BorderlessButtonStyle()) // This is crucial for allowing multiple taps
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.quaternarySystemFill))
+                )
             }
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.quaternarySystemFill))
-            )
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
         }
     }
 }

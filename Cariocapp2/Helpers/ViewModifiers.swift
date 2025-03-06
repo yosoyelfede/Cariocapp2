@@ -60,8 +60,8 @@ struct HapticButtonStyle: ButtonStyle {
     
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .onChange(of: configuration.isPressed) { oldValue, newValue in
-                if newValue {
+            .onChange(of: configuration.isPressed) { isPressed in
+                if isPressed {
                     HapticManager.playImpact(style: feedbackType)
                 }
             }

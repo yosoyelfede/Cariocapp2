@@ -106,13 +106,13 @@ struct NewGameView: View {
             // Refresh player list
             refreshPlayers()
         }
-        .onChange(of: viewContext) { _ in
+        .onChange(of: viewContext) { newValue in
             print("🎮 NewGameView - Context changed, refreshing players")
             coordinator.updateContext(viewContext)
             repository.updateContext(viewContext)
             refreshPlayers()
         }
-        .onChange(of: selectedPlayers) { _, newValue in
+        .onChange(of: selectedPlayers) { newValue in
             updateCanStart()
         }
         .alert("Add Guest Player", isPresented: $isAddingGuest) {

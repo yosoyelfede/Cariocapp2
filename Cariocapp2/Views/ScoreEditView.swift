@@ -269,7 +269,7 @@ struct ScoreEditView: View {
             .task {
                 await loadGame()
             }
-            .onChange(of: editedScores) { _, _ in
+            .onChange(of: editedScores) { newScores in
                 validateScores()
             }
         }

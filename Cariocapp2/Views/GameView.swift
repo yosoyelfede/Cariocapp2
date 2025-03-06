@@ -118,7 +118,7 @@ struct GameView: View {
         .onAppear {
             viewModel.loadGame()
         }
-        .onChange(of: viewModel.error != nil) { _, hasError in
+        .onChange(of: viewModel.error != nil) { hasError in
             showError = hasError
         }
         .alert("Error", isPresented: $showError) {

@@ -31,9 +31,9 @@ struct Cariocapp2App: App {
                         container.provideStateManager().setError(.stateRestorationFailed(error.localizedDescription))
                     }
                 }
-                .onChange(of: scenePhase) { oldPhase, newPhase in
+                .onChange(of: scenePhase) { newPhase in
                     Task {
-                        try? await handlePhaseChange(from: oldPhase, to: newPhase)
+                        try? await handlePhaseChange(from: scenePhase, to: newPhase)
                     }
                 }
         }
